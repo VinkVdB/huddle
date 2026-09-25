@@ -14,6 +14,11 @@
 
 a.badge-pill { text-decoration: none; }
 
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.col-actions { white-space: nowrap; width: 1%; }
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 4px 0; flex-wrap: nowrap; }
+.row-actions .btn { flex: 0 0 auto; }
+
 .spinner {
   display: inline-block; width: 12px; height: 12px; vertical-align: -1px; margin-right: 5px;
   border: 2px solid var(--border-strong, rgba(128,128,128,.4)); border-top-color: var(--accent, #5865f2);

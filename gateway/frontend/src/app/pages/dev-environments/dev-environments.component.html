@@ -14,6 +14,7 @@
 @if (notice()) { <p class="notice">{{ notice() }}</p> }
 
 <div class="card">
+  <div class="table-scroll">
   <table class="data-table">
     <thead>
       <tr><th>Environment</th><th>Type</th><th>Status</th><th>Requested</th><th class="col-actions">Actions</th></tr>
@@ -48,14 +49,16 @@
               }
             </td>
             <td class="col-actions" (click)="$event.stopPropagation()">
-              <button class="btn btn-ghost btn-sm" [routerLink]="['/container', e.name]" [queryParams]="e.type === 'sandbox' ? { type: 'sandbox' } : {}">Detail</button>
-              @if (e.type === 'container') {
-                @if (!e.running) { <button class="btn btn--accent btn-sm" (click)="startContainer(e.name)">Start</button> }
-                <button class="btn btn-delete btn-sm" (click)="snapshot(e.name)">Snapshot</button>
-                <button class="btn btn-delete btn-sm" (click)="deleteContainer(e.name)">Delete</button>
-              } @else {
-                <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e.name)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Delete' }}</button>
-              }
+              <div class="row-actions">
+                <button class="btn btn-ghost btn-sm" [routerLink]="['/container', e.name]" [queryParams]="e.type === 'sandbox' ? { type: 'sandbox' } : {}">Detail</button>
+                @if (e.type === 'container') {
+                  @if (!e.running) { <button class="btn btn--accent btn-sm" (click)="startContainer(e.name)">Start</button> }
+                  <button class="btn btn-delete btn-sm" (click)="snapshot(e.name)">Snapshot</button>
+                  <button class="btn btn-delete btn-sm" (click)="deleteContainer(e.name)">Delete</button>
+                } @else {
+                  <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e.name)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Delete' }}</button>
+                }
+              </div>
             </td>
           </tr>
         }
@@ -65,4 +68,5 @@
       }
     </tbody>
   </table>
+  </div>
 </div>
