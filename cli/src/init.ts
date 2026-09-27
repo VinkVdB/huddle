@@ -354,8 +354,10 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // Node runs ON the host, so it just reads the paths where they are.
   const fwFolder = cfg.firewallRulesFolder?.trim();
   const extFolder = cfg.extensionsFolder?.trim();
+  const modsFolder = cfg.modsFolder?.trim();
   if (fwFolder) console.log(dim(`  Firewall-rules folder: ${fwFolder}`));
   if (extFolder) console.log(dim(`  Extensions folder:     ${extFolder}`));
+  if (modsFolder) console.log(dim(`  Mods folder:           ${modsFolder}`));
 
   // Where the gateway will look for the control channel, and therefore which
   // interface Node has to bind it on. The two are one decision, so they are

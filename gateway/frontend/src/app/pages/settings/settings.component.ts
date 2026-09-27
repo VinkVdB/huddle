@@ -1,12 +1,13 @@
 import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/api.service';
 import { FolderSelectComponent } from '../../shared/components/folder-select/folder-select.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [FormsModule, FolderSelectComponent],
+  imports: [FormsModule, RouterLink, FolderSelectComponent],
   template: `
     <div class="page-header">
       <h1>Settings</h1>
@@ -161,6 +162,16 @@ import { FolderSelectComponent } from '../../shared/components/folder-select/fol
             <button type="button" class="btn btn-ghost" (click)="reloadFirewallFolder()" [disabled]="savingFolders()">Reload</button>
           </div>
         </div>
+        <div class="field">
+          <label for="modsFolder">Mods folder</label>
+          <p class="hint">Path to folder containing shared install/setup scripts (see the <a routerLink="/mods">Mods page</a>), read from the host on startup &amp; reload.</p>
+          <div class="tmd-input-row">
+            <app-folder-select inputId="modsFolder" [value]="resources.modsFolder"
+                               placeholder="/path/to/mods"
+                               (valueChange)="resources.modsFolder = $event" />
+            <button type="button" class="btn btn-ghost" (click)="reloadModsFolder()" [disabled]="savingFolders()">Reload</button>
+          </div>
+        </div>
       </div>
       @if (folderNote()) { <span class="saved-note">{{ folderNote() }}</span> }
     </div>
@@ -215,7 +226,7 @@ import { FolderSelectComponent } from '../../shared/components/folder-select/fol
 export class SettingsComponent implements OnInit {
   private api = inject(ApiService);
 
-  resources: HuddleSettings = { defaultMemory: '', defaultCpus: '', extensionsFolder: '', firewallRulesFolder: '' };
+  resources: HuddleSettings = { defaultMemory: '', defaultCpus: '', extensionsFolder: '', firewallRulesFolder: '', modsFolder: '' };
   mappings = signal<FolderMapping[]>([]);
   error = signal<string | null>(null);
   savingResources = signal(false);
@@ -276,6 +287,7 @@ export class SettingsComponent implements OnInit {
     this.api.saveSettings({
       extensionsFolder: this.resources.extensionsFolder,
       firewallRulesFolder: this.resources.firewallRulesFolder,
+      modsFolder: this.resources.modsFolder,
     }).subscribe({
       next: (res) => {
         this.savingFolders.set(false);
@@ -317,6 +329,39 @@ export class SettingsComponent implements OnInit {
               this.folderNote.set(`Nothing loaded — the previous rules are kept. ${detail}`);
             } else {
               this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)`);
+            }
+          },
+          error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
+        });
+      },
+      error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
+    });
+  }
+
+  // Save the folder paths, then re-read whatever mods folder is currently
+  // mounted — mirrors reloadFirewallFolder() above.
+  reloadModsFolder(): void {
+    this.savingFolders.set(true);
+    this.folderNote.set(null);
+    this.error.set(null);
+    this.api.saveSettings({
+      extensionsFolder: this.resources.extensionsFolder,
+      firewallRulesFolder: this.resources.firewallRulesFolder,
+      modsFolder: this.resources.modsFolder,
+    }).subscribe({
+      next: () => {
+        this.api.reloadModsFolder().subscribe({
+          next: (r) => {
+            this.savingFolders.set(false);
+            if (!r.mounted) {
+              this.folderNote.set(r.folder
+                ? `Saved, but Huddle cannot read ${r.folder} — check the path exists on the host.`
+                : 'Saved. Set a mods folder to load mods from.');
+            } else if (r.errors.length) {
+              const detail = r.errors.map((e) => `${e.file}: ${e.message}`).join(' · ');
+              this.folderNote.set(`Nothing loaded — the previous mods are kept. ${detail}`);
+            } else {
+              this.folderNote.set(`Loaded ${r.imported} imported, ${r.updated} updated`);
             }
           },
           error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },

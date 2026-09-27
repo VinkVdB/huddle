@@ -21,6 +21,9 @@ export interface HuddleConfig {
   // ~/.huddle/config.json; changes apply on the next `huddle restart`.
   firewallRulesFolder?: string;
   extensionsFolder?: string;
+  // Huddle mods (shareable install/setup scripts, see gateway/src/mods.ts) —
+  // same team-managed-folder story as the two above.
+  modsFolder?: string;
   // Team-managed devcontainer defaults (#98). The gateway reads these straight
   // from this file when it creates a container, so an edit applies to the next
   // container without a restart. The CLI only needs to preserve them on write.

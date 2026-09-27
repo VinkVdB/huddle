@@ -116,6 +116,25 @@ export function initDb(): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
       ON firewall_groups (name COLLATE NOCASE);
+    -- Huddle mods: named, shareable shell scripts that install/update tools or
+    -- set up environment stuff inside a devcontainer or sbx sandbox at create
+    -- time (see mods.ts). Unlike firewall_groups a mod has no membership/rule
+    -- semantics — it IS the shareable unit, so one row is one mod. source
+    -- records the same 'manual' vs 'startup-folder' split as firewall_groups,
+    -- for the same team-managed-folder reload story (mods-folder.ts).
+    CREATE TABLE IF NOT EXISTS mods (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      script TEXT NOT NULL,
+      runtime TEXT NOT NULL DEFAULT 'both' CHECK(runtime IN ('devcontainer','sbx','both')),
+      always_on INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      firewall_hint TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
     -- Per-sandbox identity (docs/ADR-sbx-identity.md). A sandbox cannot be
     -- recognised by its source address the way a devcontainer is, so Huddle Node
     -- mints a secret per box and puts it in the upstream-proxy URL sbx bakes in
@@ -663,6 +682,84 @@ export function deleteGroup(id: number): void {
     db.prepare('DELETE FROM firewall_groups WHERE id = ?').run(id);
   });
   tx();
+}
+
+// ── Mods ──────────────────────────────────────────────────────────────────────
+
+export interface ModRow {
+  id: string;
+  name: string;
+  description: string;
+  script: string;
+  runtime: string; // 'devcontainer' | 'sbx' | 'both'
+  always_on: number;
+  enabled: number;
+  firewall_hint: string;
+  source: string; // 'manual' | 'startup-folder'
+  created_at: number;
+  updated_at: number;
+}
+
+const MOD_COLUMNS =
+  'id, name, description, script, runtime, always_on, enabled, firewall_hint, source, created_at, updated_at';
+
+export function listMods(): ModRow[] {
+  return db.prepare(`SELECT ${MOD_COLUMNS} FROM mods ORDER BY name COLLATE NOCASE ASC`).all() as ModRow[];
+}
+
+export function getMod(id: string): ModRow | undefined {
+  return db.prepare(`SELECT ${MOD_COLUMNS} FROM mods WHERE id = ?`).get(id) as ModRow | undefined;
+}
+
+export function createMod(m: {
+  id: string;
+  name: string;
+  description?: string;
+  script: string;
+  runtime?: string;
+  always_on?: number;
+  enabled?: number;
+  firewall_hint?: string;
+  source?: string;
+}): void {
+  db.prepare(
+    `INSERT INTO mods (id, name, description, script, runtime, always_on, enabled, firewall_hint, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    m.id,
+    m.name,
+    m.description ?? '',
+    m.script,
+    m.runtime ?? 'both',
+    m.always_on ?? 0,
+    m.enabled ?? 1,
+    m.firewall_hint ?? '',
+    m.source ?? 'manual',
+  );
+}
+
+// Column allowlist for dynamic updates — same SQL-injection defense as
+// updateGroup (finding #9): caller-supplied keys never reach the SQL text
+// unvalidated.
+const MOD_UPDATE_COLUMNS: ReadonlyArray<
+  'name' | 'description' | 'script' | 'runtime' | 'always_on' | 'enabled' | 'firewall_hint' | 'source'
+> = ['name', 'description', 'script', 'runtime', 'always_on', 'enabled', 'firewall_hint', 'source'];
+
+export function updateMod(
+  id: string,
+  m: Partial<
+    Pick<ModRow, 'name' | 'description' | 'script' | 'runtime' | 'always_on' | 'enabled' | 'firewall_hint' | 'source'>
+  >,
+): void {
+  const keys = validateUpdateKeys(m, MOD_UPDATE_COLUMNS, 'mod');
+  if (keys.length === 0) return;
+  const fields = [...keys.map((k) => `${k} = ?`), 'updated_at = unixepoch()'].join(', ');
+  const values = [...keys.map((k) => (m as Record<string, unknown>)[k]), id];
+  db.prepare(`UPDATE mods SET ${fields} WHERE id = ?`).run(...values);
+}
+
+export function deleteMod(id: string): void {
+  db.prepare('DELETE FROM mods WHERE id = ?').run(id);
 }
 
 // ── Approved Host Ports ───────────────────────────────────────────────────────

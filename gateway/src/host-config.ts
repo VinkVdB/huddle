@@ -55,6 +55,7 @@ export interface ResourceDefaults {
 export interface HostConfig {
   firewallRulesFolder?: string;
   extensionsFolder?: string;
+  modsFolder?: string;
   defaultMemory?: string;
   defaultCpus?: string;
   folderMappings?: HostFolderMapping[];
@@ -218,7 +219,7 @@ export function updateHostConfig(patch: Partial<HostConfig>): boolean {
   return mutateHostConfig(() => patch);
 }
 
-export function setHostFolder(key: 'firewallRulesFolder' | 'extensionsFolder', value: string): boolean {
+export function setHostFolder(key: 'firewallRulesFolder' | 'extensionsFolder' | 'modsFolder', value: string): boolean {
   return updateHostConfig({ [key]: value || undefined });
 }
 

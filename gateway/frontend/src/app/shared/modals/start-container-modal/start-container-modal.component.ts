@@ -1,10 +1,12 @@
 import { Component, inject, effect, HostListener } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgTemplateOutlet } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { ModalService } from '../../../core/services/modal.service';
 import { ApiService, FolderMapping } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
+import { Mod } from '../../../core/models/mod.model';
 import { SbxSettingsFolders } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
@@ -71,7 +73,7 @@ interface Lifecycle {
 @Component({
   selector: 'app-start-container-modal',
   standalone: true,
-  imports: [FormsModule, NgTemplateOutlet, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent, IconComponent],
+  imports: [FormsModule, NgTemplateOutlet, RouterLink, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent, IconComponent],
   templateUrl: './start-container-modal.component.html',
   styles: [`
     /* ── Modal chrome — ported from the create-modal.html mockup (.ce-* rules),
@@ -319,6 +321,12 @@ interface Lifecycle {
     .life-row label { font-size: 12px; font-weight: 600; font-family: monospace; color: var(--text); }
     .life-row input { font-family: monospace; }
 
+    .mod-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0; font-size: 12.5px; }
+    .mod-row input[type="checkbox"] { flex-shrink: 0; }
+    .mod-row-name { font-weight: 600; }
+    .mod-row-desc { font-size: 11.5px; flex-basis: 100%; margin-left: 22px; }
+    .pill--on { padding: 2px 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); }
+
     .sc-devcjson-pill { margin-left: 6px; }
 
     /* ── Footer panel (container kind only) ─────────────────────────────────── */
@@ -409,11 +417,17 @@ export class StartContainerModalComponent {
   // no backend change needed for this piece.
   containerSettingsFolders: FolderMapping[] = [];
 
+  // huddle mods (see mods.ts) — shared library, same "right column, common to
+  // both kinds" story as lifecycle/env vars above. always-on mods are shown
+  // pre-checked and disabled (they apply regardless); the rest are opt-in.
+  mods: Mod[] = [];
+  selectedModIds = new Set<string>();
+
   // Right-column accordions, all collapsed by default. (Previously defaulted
   // open on the theory that an interactive form should show everything up
   // front — reverted per product feedback: a first-time user should see the
   // collapsed section structure, not a wall of open panels.)
-  accOpen: Record<string, boolean> = { baseImage: false, envVars: false, jetbrains: false, vscode: false, lifecycle: false };
+  accOpen: Record<string, boolean> = { baseImage: false, envVars: false, jetbrains: false, vscode: false, lifecycle: false, mods: false };
 
   get open() { return this.modalService.startOpen(); }
 
@@ -517,8 +531,14 @@ export class StartContainerModalComponent {
     this.ignoredEnvWarnings = [];
     this.doneWithWarnings = false;
     this.containerSettingsFolders = [];
+    this.mods = [];
+    this.selectedModIds = new Set();
     this.restoreRemembered();
     this.loadImagesForIde();
+    this.api.getMods().subscribe({
+      next: (ms) => { this.mods = ms; },
+      error: () => { this.mods = []; },
+    });
     // Show which settings folders (folder mappings) the sandbox will get, and
     // which mappings cannot travel — that difference is otherwise invisible.
     this.api.sbxSettingsFolders().subscribe({
@@ -811,6 +831,26 @@ export class StartContainerModalComponent {
     this.accOpen[key] = !this.accOpen[key];
   }
 
+  // ── Mods (see mods.ts) ───────────────────────────────────────────────────────
+  // Filtered to this environment's kind, matching resolveModsForWorkspace's own
+  // runtime check server-side ('both' mods apply either way).
+  modsForKind(): Mod[] {
+    const runtime = this.kind === 'sandbox' ? 'sbx' : 'devcontainer';
+    return this.mods.filter((m) => m.enabled && (m.runtime === 'both' || m.runtime === runtime));
+  }
+  isModSelected(m: Mod): boolean {
+    return !!m.always_on || this.selectedModIds.has(m.id);
+  }
+  toggleMod(m: Mod): void {
+    if (m.always_on) return; // always-on isn't optional — nothing to toggle
+    if (this.selectedModIds.has(m.id)) this.selectedModIds.delete(m.id);
+    else this.selectedModIds.add(m.id);
+  }
+  private buildModIds(): string[] | undefined {
+    const ids = this.modsForKind().filter((m) => this.isModSelected(m)).map((m) => m.id);
+    return ids.length ? ids : undefined;
+  }
+
   /**
    * Parses the JetBrains "settings" textarea once, shared by both confirm
    * paths (the accordion is common to container and sandbox kinds). Returns
@@ -866,6 +906,7 @@ export class StartContainerModalComponent {
       jbPlugins: this.jbPlugins.map(p => p.trim()).filter(Boolean),
       jbSettings,
       lifecycle: this.buildLifecycle(),
+      modIds: this.buildModIds(),
     }).subscribe({
       next: (r) => {
         this.remember();
@@ -914,6 +955,7 @@ export class StartContainerModalComponent {
       jbPlugins: this.jbPlugins.map(p => p.trim()).filter(Boolean),
       jbSettings,
       lifecycle: this.buildLifecycle(),
+      modIds: this.buildModIds(),
     }).subscribe({
       next: (r) => {
         this.loading = false;

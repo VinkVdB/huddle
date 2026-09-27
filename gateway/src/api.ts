@@ -17,6 +17,16 @@ import {
   reloadFirewallRulesFolder,
   syncGroupsToFolder,
 } from './firewall-groups';
+import {
+  listMods,
+  getMod,
+  createMod,
+  updateMod,
+  deleteMod,
+  isModRuntime,
+} from './mods';
+import { validateModEnvelope, type ModEnvelope } from './mods-envelope';
+import { reloadModsFolder, syncModsToFolder } from './mods-folder';
 
 import {
   readHostConfig,
@@ -810,6 +820,125 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return syncGroupsToFolder();
   });
 
+  // ── Mods (shareable install/setup scripts — see mods.ts) ─────────────────────
+
+  app.get('/api/mods', async () => listMods());
+
+  app.get<{ Params: { id: string } }>('/api/mods/:id', async (req, reply) => {
+    const mod = getMod(req.params.id);
+    if (!mod) return reply.code(404).send({ error: 'not_found' });
+    return mod;
+  });
+
+  app.post<{
+    Body: {
+      id?: string; name?: string; description?: string; script?: string;
+      runtime?: string; always_on?: boolean; enabled?: boolean; firewall_hint?: string;
+    };
+  }>('/api/mods', async (req, reply) => {
+    const b = req.body ?? {};
+    if (!b.id || !b.name || typeof b.script !== 'string') {
+      return reply.code(400).send({ error: 'id, name and script are required' });
+    }
+    if (b.runtime !== undefined && !isModRuntime(b.runtime)) {
+      return reply.code(400).send({ error: 'invalid', message: `runtime must be one of devcontainer, sbx, both` });
+    }
+    try {
+      const mod = createMod({
+        id: b.id,
+        name: b.name,
+        description: b.description,
+        script: b.script,
+        runtime: isModRuntime(b.runtime) ? b.runtime : 'both',
+        always_on: b.always_on,
+        enabled: b.enabled,
+        firewall_hint: b.firewall_hint,
+      });
+      return mod;
+    } catch (err: any) {
+      return reply.code(400).send({ error: 'invalid', message: err.message });
+    }
+  });
+
+  app.put<{
+    Params: { id: string };
+    Body: {
+      name?: string; description?: string; script?: string; runtime?: string;
+      always_on?: boolean; enabled?: boolean; firewall_hint?: string;
+    };
+  }>('/api/mods/:id', async (req, reply) => {
+    if (!getMod(req.params.id)) return reply.code(404).send({ error: 'not_found' });
+    const b = req.body ?? {};
+    if (b.runtime !== undefined && !isModRuntime(b.runtime)) {
+      return reply.code(400).send({ error: 'invalid', message: `runtime must be one of devcontainer, sbx, both` });
+    }
+    try {
+      return updateMod(req.params.id, { ...b, runtime: isModRuntime(b.runtime) ? b.runtime : undefined });
+    } catch (err: any) {
+      return reply.code(400).send({ error: 'invalid', message: err.message });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/mods/:id', async (req, reply) => {
+    if (!getMod(req.params.id)) return reply.code(404).send({ error: 'not_found' });
+    deleteMod(req.params.id);
+    return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/mods/:id/export', async (req, reply) => {
+    const mod = getMod(req.params.id);
+    if (!mod) return reply.code(404).send({ error: 'not_found' });
+    const env: ModEnvelope = {
+      version: 1,
+      kind: 'huddle-mod',
+      exported_at: Math.floor(Date.now() / 1000),
+      mod: {
+        id: mod.id, name: mod.name, description: mod.description,
+        runtime: mod.runtime as ModEnvelope['mod']['runtime'],
+        always_on: mod.always_on === 1, firewall_hint: mod.firewall_hint,
+      },
+      script: mod.script,
+    };
+    return env;
+  });
+
+  app.post<{ Body: unknown }>('/api/mods/import', async (req, reply) => {
+    let env: ModEnvelope;
+    try {
+      env = validateModEnvelope(req.body);
+    } catch (err: any) {
+      return reply.code(400).send({ error: 'invalid envelope', message: err.message });
+    }
+    try {
+      if (getMod(env.mod.id)) {
+        const mod = updateMod(env.mod.id, {
+          name: env.mod.name, description: env.mod.description, script: env.script,
+          runtime: env.mod.runtime, always_on: env.mod.always_on, firewall_hint: env.mod.firewall_hint,
+        });
+        return { mod, imported: 0, updated: 1 };
+      }
+      const mod = createMod({
+        id: env.mod.id, name: env.mod.name, description: env.mod.description, script: env.script,
+        runtime: env.mod.runtime, always_on: env.mod.always_on, firewall_hint: env.mod.firewall_hint,
+      });
+      return { mod, imported: 1, updated: 0 };
+    } catch (err: any) {
+      return reply.code(400).send({ error: 'invalid', message: err.message });
+    }
+  });
+
+  // Manual reload of the team-managed mods folder.
+  app.post('/api/mods-folder/reload', async () => {
+    return reloadModsFolder();
+  });
+
+  // Write the portal's mods back out to the team-managed folder (app → files).
+  // Needs the folder mounted read-write; a gateway started with the old
+  // read-only mount reports write errors until `huddle restart` remounts it.
+  app.post('/api/mods-folder/sync', async () => {
+    return syncModsToFolder();
+  });
+
   app.get('/api/containers', async () => {
     const rows = db
       .prepare(
@@ -1006,13 +1135,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
     jbPlugins?: string[];
     jbSettings?: Record<string, unknown>;
     lifecycle?: LifecycleCommands;
+    modIds?: string[];
   } }>(
     '/api/docker/start',
     async (req, reply) => {
       const {
         imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName,
         empty, presentableName: presentableNameOverride, memory, cpus,
-        containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+        containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle, modIds,
       } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
@@ -1111,6 +1241,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         jbPlugins,
         jbSettings,
         lifecycle,
+        modIds,
       };
       try {
         const { id, ignoredEnv } = await createAndStartContainer(params);
@@ -1145,6 +1276,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     jbPlugins?: string[];
     jbSettings?: Record<string, unknown>;
     lifecycle?: LifecycleCommands;
+    modIds?: string[];
   } }>(
     '/api/sbx/start',
     async (req, reply) => {
@@ -1174,7 +1306,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (workspace !== undefined && workspace !== '' && !isValidWorkspacePath(workspace)) {
         return reply.code(400).send({ error: `invalid folder path: ${workspace}` });
       }
-      const { containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle } = req.body ?? {};
+      const { containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle, modIds } = req.body ?? {};
       // Same structural checks as /api/docker/start — a reserved-name
       // collision is a warning (ignoredEnv) but an illegal identifier is a
       // client bug, rejected here rather than silently dropped.
@@ -1192,7 +1324,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       try {
         const result = await startSandbox({
           name, agent: agent || undefined, workspace: workspace || undefined, workspaces,
-          containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+          containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle, modIds,
         });
         logAudit({ containerId: null, domain: '-', action: `admin:sbx-start${result.ok ? '' : '-failed'}` });
         return { name, ...result };
@@ -1613,6 +1745,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
     console.warn(`[firewall] startup folder reload failed: ${(err as Error).message}`);
   }
 
+  // Load team-managed mods from the CLI-configured folder at startup, same
+  // best-effort story as the firewall-rules folder above.
+  try {
+    reloadModsFolder();
+  } catch (err) {
+    console.warn(`[mods] startup folder reload failed: ${(err as Error).message}`);
+  }
+
   // Serve an extension's static frontend assets from
   // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
@@ -1645,15 +1785,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
       defaultCpus: resources.defaultCpus,
       extensionsFolder: host.extensionsFolder ?? '',
       firewallRulesFolder: host.firewallRulesFolder ?? '',
+      modsFolder: host.modsFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
       hostConfigMounted: hostConfigAvailable(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; modsFolder?: string } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, modsFolder } = req.body;
       let restartRequired = false;
       let persisted = true;
       // Resource limits go into the same config file, but need no remount: the
@@ -1662,13 +1803,13 @@ export async function createApiServer(): Promise<FastifyInstance> {
         persisted = setResourceDefaults({ defaultMemory, defaultCpus }) && persisted;
       }
       // Folder paths are written into the CLI config, which Huddle Node reads
-      // per call — no remount, so the firewall-rules folder is live on the next
-      // reload. Extensions are the exception: they are loaded once at boot, so
-      // pointing at a different folder does need a restart.
+      // per call — no remount, so the firewall-rules/mods folders are live on
+      // the next reload. Extensions are the exception: they are loaded once at
+      // boot, so pointing at a different folder does need a restart.
       //
-      // Both go through the host-path normalizer: one notation in the config
-      // file, and no `~` that nothing would expand.
-      for (const [key, raw] of [['extensionsFolder', extensionsFolder], ['firewallRulesFolder', firewallRulesFolder]] as const) {
+      // All three go through the host-path normalizer: one notation in the
+      // config file, and no `~` that nothing would expand.
+      for (const [key, raw] of [['extensionsFolder', extensionsFolder], ['firewallRulesFolder', firewallRulesFolder], ['modsFolder', modsFolder]] as const) {
         if (raw === undefined) continue;
         const folder = normalizeHostPath(raw);
         const problem = folder ? hostPathError(folder) : null;   // empty clears the setting

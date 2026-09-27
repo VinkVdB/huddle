@@ -32,6 +32,7 @@ import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl }
 // shape (env/lifecycle/customizations) common across container and sbx.
 import { filterUserEnv, shQuote, type LifecycleCommands, type IdeName } from './docker';
 import { readDevcontainerScript } from './devcontainer-scripts';
+import { resolveModsForWorkspace, buildModsScript, auditModsApplied } from './mods';
 
 const execHostCommand = promisify(execCb);
 
@@ -171,6 +172,9 @@ export interface SbxStartOpts {
   jbPlugins?: string[];
   jbSettings?: Record<string, unknown>;
   lifecycle?: LifecycleCommands;
+  // Opt-in huddle mods (see mods.ts), same field/semantics as StartParams in
+  // docker.ts — resolved against runtime 'sbx' instead of 'devcontainer'.
+  modIds?: string[];
 }
 
 /**
@@ -341,6 +345,14 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   }
   // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
   steps.push(await trustCa(opts.name));
+
+  // Huddle mods (see mods.ts) — root (a sandbox has no unprivileged user to
+  // downgrade to anyway), same trust tier as the JetBrains backend install
+  // below; runs right after CA trust so a mod's package installs succeed.
+  const resolvedMods = resolveModsForWorkspace(opts.modIds, 'sbx');
+  const modsScript = buildModsScript(resolvedMods);
+  if (modsScript) steps.push(await runInSandbox(opts.name, 'run huddle mods', modsScript));
+  auditModsApplied(opts.name, resolvedMods);
 
   // SSH access (Stage 2): mint a keypair + fixed host port, then bootstrap
   // sshd inside the sandbox. `sbx setup ssh` (ops.sshSetup(), ops.ts TODO(T2.3))

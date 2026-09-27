@@ -14,6 +14,7 @@ import { provisionSshAccess, getSshAccess, dropSshAccess } from './ssh-keys';
 import { notifyStateChanged } from './events';
 import { waitForSocketReadiness } from './socket-registration';
 import { readDevcontainerScript } from './devcontainer-scripts';
+import { resolveModsForWorkspace, buildModsScript, auditModsApplied } from './mods';
 
 const SOCKET_DIR = runtimeEnv.socketDir;
 
@@ -912,6 +913,7 @@ export function buildJbConfigScript(
   remoteEnv: Record<string, string> = {},
   jbPlugins: string[] = [],
   jbSettings?: Record<string, unknown>,
+  modsScript: string = '',
 ): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
@@ -978,6 +980,11 @@ chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
 command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
+
+# Huddle mods (see mods.ts) — root, same trust tier as install-ide.sh below and
+# for the same reason: runs AFTER the CA is trusted, since a mod's package
+# installs go through Huddle's MITM proxy.
+${modsScript}
 
 # Install the JetBrains backend + plugins at runtime (install-ide.sh) instead
 # of baking a per-IDE image — must run AFTER the CA is trusted above: its curl
@@ -1125,6 +1132,7 @@ export function buildVscodeConfigScript(
   seedScript: string,
   lifecycle?: LifecycleCommands,
   remoteEnv: Record<string, string> = {},
+  modsScript: string = '',
 ): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const sshdBootstrapScript = buildSshdBootstrap(sshPublicKey);
@@ -1167,6 +1175,11 @@ chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
 command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
+
+# Huddle mods (see mods.ts) — root, same trust tier as install-ide.sh in the
+# JetBrains variant; runs AFTER the CA is trusted, since a mod's package
+# installs go through Huddle's MITM proxy.
+${modsScript}
 
 ${IDE_CRED_SCRUB}
 
@@ -1331,6 +1344,10 @@ export interface StartParams {
   jbPlugins?: string[];                    // customizations.jetbrains.plugins — JetBrains only, ignored for vscode
   jbSettings?: Record<string, unknown>;    // customizations.jetbrains.settings — JetBrains only, ignored for vscode
   lifecycle?: LifecycleCommands;
+  // Opt-in huddle mods (see mods.ts) selected in the create modal, in addition
+  // to whichever mods are marked always-on. Resolved + rendered once inside
+  // createAndStartContainer, same as every other create-time field here.
+  modIds?: string[];
 }
 
 function parseMemoryBytes(s: string): number {
@@ -1738,15 +1755,22 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
   const containerPaths = folderMounts.map(m => m.Target);
   const seedScript = buildFolderMappingSeedScript(containerPaths);
 
+  // Resolve + render the huddle mods selected for this container (always-on
+  // mods plus the caller's opt-in picks) — see mods.ts's trust-model comment
+  // for why these run as root instead of via buildLifecycleStep's `su vscode`.
+  const resolvedMods = resolveModsForWorkspace(params.modIds, 'devcontainer');
+  const modsScript = buildModsScript(resolvedMods);
+
   // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord, params.jbPlugins ?? [], params.jbSettings);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord, modsScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord, params.jbPlugins ?? [], params.jbSettings, modsScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
+  auditModsApplied(containerName, resolvedMods);
 
   // No standing password anymore: 'noot' is created locked. Admin access now goes
   // via an ephemeral sudo grant (POST /api/docker/containers/:name/sudo-grant).

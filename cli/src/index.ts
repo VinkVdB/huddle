@@ -5,6 +5,7 @@ import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
+import { runModsFolder } from './mods';
 import { runInit } from './init';
 import { runNode } from './node';
 import { runMigrate } from './migrate';
@@ -32,7 +33,7 @@ export interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'dry-run', 'follow', 'f', 'node', 'gateway']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'container', 'node', 'logs', 'log', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'mods', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'container', 'node', 'logs', 'log', 'help', 'version']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -179,6 +180,10 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle mods folder set <path>      Set the team-managed mods folder (shareable
+                                     install/setup scripts — see the Mods page)
+  huddle mods folder reload          Re-read the team-managed mods folder
+  huddle mods folder sync            Write the portal's mods back to the folder
   huddle logs [options]              Show both halves' output: Huddle Node's log
                                      file on this host and the gateway container
                                      (-n <lines>, -f to follow, --node/--gateway
@@ -412,6 +417,17 @@ async function main(): Promise<void> {
       await runFirewallFolder({ action: positional[2], path: positional[3] });
     } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'mods') {
+    const subCmd = sub ?? 'folder';
+    if (subCmd === 'folder') {
+      await runModsFolder({ action: positional[2], path: positional[3] });
+    } else {
+      console.error(`Unknown mods subcommand: ${subCmd}`);
       process.exit(1);
     }
     return;

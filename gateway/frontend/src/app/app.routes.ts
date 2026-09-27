@@ -8,6 +8,7 @@ export const routes: Routes = [
   { path: 'sandboxes', loadComponent: () => import('./pages/sandboxes/sandboxes.component').then(m => m.SandboxesComponent) },
   { path: 'dev-environments', loadComponent: () => import('./pages/dev-environments/dev-environments.component').then(m => m.DevEnvironmentsComponent) },
   { path: 'firewall', loadComponent: () => import('./pages/firewall/firewall.component').then(m => m.FirewallComponent) },
+  { path: 'mods', loadComponent: () => import('./pages/mods/mods.component').then(m => m.ModsComponent) },
   { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
 { path: 'network-log', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
   { path: 'settings', loadComponent: () => import('./pages/settings/settings.component').then(m => m.SettingsComponent) },

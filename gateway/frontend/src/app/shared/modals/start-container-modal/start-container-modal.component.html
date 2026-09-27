@@ -387,6 +387,33 @@
                 </div>
               }
             </div>
+
+            <!-- Mods (see mods.ts) -->
+            @if (modsForKind().length > 0) {
+              <div class="sc-acc">
+                <button type="button" class="sc-acc-head" (click)="toggleAcc('mods')">
+                  <app-icon name="terminal" [size]="16" class="sc-acc-mark" />
+                  <span class="sc-acc-t">
+                    <span class="sc-acc-name">Mods</span>
+                    <span class="sc-acc-sub muted">shared install/setup scripts, run as root at create</span>
+                  </span>
+                  <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['mods']" />
+                </button>
+                @if (accOpen['mods']) {
+                  <div class="sc-acc-body">
+                    @for (m of modsForKind(); track m.id) {
+                      <label class="mod-row">
+                        <input type="checkbox" [checked]="isModSelected(m)" [disabled]="!!m.always_on" (change)="toggleMod(m)" />
+                        <span class="mod-row-name">{{ m.name }}</span>
+                        @if (m.always_on) { <span class="pill pill--on">Always on</span> }
+                        @if (m.description) { <span class="mod-row-desc muted">{{ m.description }}</span> }
+                      </label>
+                    }
+                    <p class="mount-hint muted">Runs as root, same trust level as Huddle's own IDE-backend install. Manage the library on the <a routerLink="/mods">Mods page</a>.</p>
+                  </div>
+                }
+              </div>
+            }
           </div>
         </div>
 

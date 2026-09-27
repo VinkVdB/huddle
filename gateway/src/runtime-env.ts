@@ -111,6 +111,8 @@ export interface RuntimeEnv {
    */
   firewallRulesMount: string;
   teamExtDir: string;
+  /** Same fallback story as firewallRulesMount/teamExtDir, for the mods folder (see mods-folder.ts). */
+  modsFolderMount: string;
 }
 
 /**
@@ -197,6 +199,7 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
     homeDir,
     firewallRulesMount: env.HUDDLE_FIREWALL_RULES_MOUNT?.trim() || '/firewall-rules',
     teamExtDir: env.HUDDLE_EXTENSIONS_MOUNT?.trim() || '/extensions',
+    modsFolderMount: env.HUDDLE_MODS_MOUNT?.trim() || '/mods-folder',
   };
 }
 

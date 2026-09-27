@@ -9,12 +9,14 @@ import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } f
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
 import { FirewallGroup, GroupDetail, ImportGroupResult } from '../models/group.model';
+import { Mod, ModEnvelope, ModImportResult } from '../models/mod.model';
 
 export interface HuddleSettings {
   defaultMemory: string;
   defaultCpus: string;
   extensionsFolder: string;
   firewallRulesFolder: string;
+  modsFolder: string;
   hostConfigMounted?: boolean;
 }
 
@@ -279,6 +281,50 @@ export class ApiService {
     return this.handle(this.http.post<any>('/api/firewall-rules-folder/sync', {}));
   }
 
+  // ── Mods (shareable install/setup scripts — see gateway/src/mods.ts) ────────
+
+  getMods(): Observable<Mod[]> {
+    return this.handle(this.http.get<Mod[]>('/api/mods'));
+  }
+
+  getMod(id: string): Observable<Mod> {
+    return this.handle(this.http.get<Mod>(`/api/mods/${id}`));
+  }
+
+  createMod(m: {
+    id: string; name: string; description?: string; script: string;
+    runtime?: 'devcontainer' | 'sbx' | 'both'; always_on?: boolean; enabled?: boolean; firewall_hint?: string;
+  }): Observable<Mod> {
+    return this.handle(this.http.post<Mod>('/api/mods', m));
+  }
+
+  updateMod(id: string, patch: {
+    name?: string; description?: string; script?: string;
+    runtime?: 'devcontainer' | 'sbx' | 'both'; always_on?: boolean; enabled?: boolean; firewall_hint?: string;
+  }): Observable<Mod> {
+    return this.handle(this.http.put<Mod>(`/api/mods/${id}`, patch));
+  }
+
+  deleteMod(id: string): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/mods/${id}`));
+  }
+
+  exportMod(id: string): Observable<ModEnvelope> {
+    return this.handle(this.http.get<ModEnvelope>(`/api/mods/${id}/export`));
+  }
+
+  importMod(envelope: unknown): Observable<ModImportResult> {
+    return this.handle(this.http.post<ModImportResult>('/api/mods/import', envelope));
+  }
+
+  reloadModsFolder(): Observable<{ folder: string | null; mounted: boolean; files: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/mods-folder/reload', {}));
+  }
+
+  syncModsFolder(): Observable<{ folder: string | null; mounted: boolean; writable: boolean; written: number; pruned: number; files: { file: string; mod: string }[]; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/mods-folder/sync', {}));
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
@@ -322,6 +368,7 @@ export class ApiService {
     jbPlugins?: string[];
     jbSettings?: Record<string, unknown>;
     lifecycle?: DevcontainerLifecycle;
+    modIds?: string[];
   }): Observable<{ id: string; containerName: string; ignoredEnv: string[] }> {
     return this.handle(this.http.post<{ id: string; containerName: string; ignoredEnv: string[] }>('/api/docker/start', {
       imageName: params.image,
@@ -342,6 +389,7 @@ export class ApiService {
       ...(params.jbPlugins?.length ? { jbPlugins: params.jbPlugins } : {}),
       ...(params.jbSettings ? { jbSettings: params.jbSettings } : {}),
       ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
+      ...(params.modIds?.length ? { modIds: params.modIds } : {}),
     }));
   }
 
@@ -364,6 +412,7 @@ export class ApiService {
       jbPlugins?: string[];
       jbSettings?: Record<string, unknown>;
       lifecycle?: DevcontainerLifecycle;
+      modIds?: string[];
     } = {}
   ): Observable<SbxStartResult> {
     return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', {
@@ -374,6 +423,7 @@ export class ApiService {
       jbPlugins: body.jbPlugins?.length ? body.jbPlugins : undefined,
       jbSettings: body.jbSettings ?? undefined,
       lifecycle: body.lifecycle ?? undefined,
+      modIds: body.modIds?.length ? body.modIds : undefined,
     }));
   }
 
