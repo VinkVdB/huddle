@@ -163,13 +163,6 @@ export class SandboxesComponent {
       error: (e) => { this.setBusy(name, null); this.setMsg(name, '✗ ' + (e?.error?.error || 'CA install failed')); },
     });
   }
-  sshSetup(): void {
-    this.setBusy('__ssh__', 'Enabling SSH bridge…');
-    this.api.sbxSshSetup().subscribe({
-      next: (r) => { this.setBusy('__ssh__', null); this.setMsg('__ssh__', r.ok ? '✓ SSH bridge ready' : `✗ ssh setup failed (exit ${r.exitCode ?? r.code})`); },
-      error: (e) => { this.setBusy('__ssh__', null); this.setMsg('__ssh__', '✗ ' + (e?.error?.error || 'ssh setup failed')); },
-    });
-  }
   remove(name: string): void {
     if (!confirm(`Remove sandbox "${name}"? This deletes the microVM.`)) return;
     this.setBusy(name, 'Removing…');

@@ -395,10 +395,6 @@ export class ApiService {
     return this.handle(this.http.post<SbxCommandResult>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/trust-ca`, {}));
   }
 
-  sbxSshSetup(): Observable<SbxCommandResult> {
-    return this.handle(this.http.post<SbxCommandResult>('/api/sbx/ssh-setup', {}));
-  }
-
   sbxSshKey(name: string): Observable<SbxSshAccess> {
     return this.handle(this.http.get<SbxSshAccess>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/ssh-key`));
   }

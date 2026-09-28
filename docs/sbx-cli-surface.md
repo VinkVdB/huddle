@@ -22,7 +22,7 @@ and open questions, see [`docs/ADR-workspace-runtime-abstraction.md`](./ADR-work
 | `sandbox.list` | `sbx ls` | `execFile` |
 | `sandbox.remove` | `sbx rm [--force] <name>` | `execFile` |
 | `sandbox.exec` | `sbx exec [-it] <name> -- <cmd...>` | `spawn` (streaming) |
-| `sandbox.sshSetup` | `sbx setup ssh` | `execFile` |
+| `sandbox.portsPublish` | `sbx ports <name> --publish <spec>` | `execFile` |
 | `policy.set` | `sbx policy <allow\|deny> network <target> [--sandbox <name>]` | `execFile` |
 | `policy.list` | `sbx policy list [--sandbox <name>]` | `execFile` |
 | `policy.remove` | _(none — throws; see OPEN §2)_ | — |
@@ -62,6 +62,19 @@ and open questions, see [`docs/ADR-workspace-runtime-abstraction.md`](./ADR-work
 - **`--sandbox <name>` scope flag** (`policy.set` / `policy.list`) is added only
   for `scope.kind === 'sandbox'`; global scope adds nothing. **This flag is an
   unverified best guess** — see OPEN §1.
+- **`sandbox.portsPublish`**: spec format is `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]`
+  (confirmed via `sbx ports --help`). Huddle always passes an explicit
+  `HOST_PORT` — the fixed port it minted for this target in `ssh-keys.ts`'s
+  `24850-24899` pool — rather than requesting an ephemeral one, so the same
+  port is stable across reads of `GET /api/sbx/sandboxes/:name/ssh-key`.
+  Called once at sandbox create (`sbx.ts`'s `publishSshPort`, right after the
+  sshd bootstrap script) to bind that host port to the sandbox's `:22` — this
+  step was previously **missing entirely**, so Huddle showed users a
+  keypair + port that was never reachable. `HOST_PORT` collisions are not
+  pre-checked against the daemon's own port bookkeeping (only against other
+  Huddle-tracked targets, via `allocateSshPort`); a real collision surfaces
+  as a failed `publish SSH port` create-step rather than being silently
+  swallowed.
 
 ## Output parsing
 
@@ -117,7 +130,7 @@ single actionable message:
 > `Docker login required on the host: run` `docker login` `(the current Docker credentials are missing, expired, or revoked).`
 
 Returns `null` when no match (caller falls back to the raw error). This upgrade is
-applied by `create`, `remove`, `exec`, `sshSetup`, and the shared `throwSbxError`
+applied by `create`, `remove`, `exec`, `portsPublish`, and the shared `throwSbxError`
 helper (used by `version`, `setProxy`, `policySet`, `policyList`, `list`). For the
 streaming ops (`create`/`exec`) only the last 64 KiB of stderr is retained for this
 check; a matched login error is thrown as an `ok:false` Response even though the
@@ -148,8 +161,14 @@ Mirrors the ADR §7 open questions. Everything here is **unconfirmed against a r
    (likely `sbx policy remove network <target> [--sandbox <name>]` or a `--delete`
    flag) before wiring it. Kept explicit so reconciliation can't assume success.
    (`TODO(T1.3)`)
-3. **SSH setup verb** — `sshSetup()` runs `sbx setup ssh`; confirm whether it is
-   `sbx setup ssh` or `sbx ssh setup`. (`TODO(T2.3)`)
+3. ~~**SSH setup verb**~~ — **Removed (2026-09).** `ops.sshSetup()`/`sbx setup
+   ssh` used to back a separate "Enable SSH" button. Confirmed via a real
+   `sbx setup ssh --help` that it's host-local ssh_config generation
+   (`ssh <name>.sbx`, authenticated over the daemon's Unix socket) — an
+   entirely different, redundant mechanism from Huddle's own minted-key +
+   published-port sshd (`sbx.ts`'s `sshBootstrapScript` + `publishSshPort`),
+   which is what the JetBrains link and `huddle sbx ssh-setup` actually rely
+   on. Deleted rather than kept alongside it. (Formerly `TODO(T2.3)`.)
 4. **`sbx policy list` format** — confirm the real output and tighten
    `parsePolicyList` (currently best-effort, degrades to `[]`). (`TODO(T1.3)`)
 5. **`sbx policy log` machine-readability** — for the discovery / request→approve

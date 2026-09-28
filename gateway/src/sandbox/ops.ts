@@ -370,14 +370,24 @@ export async function exec(p: ExecParams, onChunk: StreamChunk): Promise<number>
   return code;
 }
 
-export async function sshSetup(): Promise<number> {
-  // TODO(T2.3): confirm exact verb (`sbx setup ssh` vs `sbx ssh setup`).
-  const r = await runSbx(['setup', 'ssh']);
+/**
+ * `sbx ports <name> --publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]`.
+ * Binds a host port to a port inside the sandbox — the missing step for
+ * Huddle's own per-sandbox sshd (see sbx.ts's `sshBootstrapScript` caller):
+ * minting a host port in `ssh-keys.ts` and starting sshd inside the box does
+ * nothing for reachability unless something also publishes that port with
+ * the daemon. Returns the full result (not just an exit code) so the caller
+ * can surface stdout/stderr in the create-step log — a publish that silently
+ * fails would otherwise look identical to a working SSH setup.
+ */
+export async function portsPublish(name: string, spec: string): Promise<RunResult> {
+  if (!isValidSandboxName(name)) throw new Error(`invalid sandbox name: ${name}`);
+  const r = await runSbx(['ports', name, '--publish', spec]);
   if (r.code !== 0) {
     const login = detectDockerLoginError(r.stderr, r.stdout);
     if (login) throw new Error(login);
   }
-  return r.code;
+  return r;
 }
 
 // ── policy ────────────────────────────────────────────────────────────────────

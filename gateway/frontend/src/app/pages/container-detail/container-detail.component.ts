@@ -208,19 +208,12 @@ export class ContainerDetailComponent implements OnInit {
       error: (e) => { this.sbxMsg = '✗ ' + (e?.error?.error || 'CA install failed'); },
     });
   }
-  sbxSshSetup(): void {
-    this.sbxMsg = 'Enabling SSH bridge…';
-    this.api.sbxSshSetup().subscribe({
-      next: (r) => { this.sbxMsg = r.ok ? '✓ SSH bridge ready' : `✗ ssh setup failed (exit ${r.exitCode ?? r.code})`; this.loadSbxSshAccess(); },
-      error: (e) => { this.sbxMsg = '✗ ' + (e?.error?.error || 'ssh setup failed'); },
-    });
-  }
   // Best-effort refresh of the SSH access + JetBrains link; the backend may still
   // be installing (jetbrainsLink comes back null), so this is safe to call repeatedly.
   loadSbxSshAccess(): void {
     this.api.sbxSshKey(this.name).subscribe({
       next: (access) => { this.sbxSshAccess = access; },
-      error: () => { /* not provisioned yet (e.g. SSH bridge not enabled) — leave sbxSshAccess as-is */ },
+      error: () => { /* not provisioned yet — e.g. sandbox still creating — leave sbxSshAccess as-is */ },
     });
   }
   // The backend publishes its own connect link once IntelliJ has finished installing and

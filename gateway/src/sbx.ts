@@ -342,17 +342,17 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
   steps.push(await trustCa(opts.name));
 
-  // SSH access (Stage 2): mint a keypair + fixed host port, then bootstrap
-  // sshd inside the sandbox. `sbx setup ssh` (ops.sshSetup(), ops.ts TODO(T2.3))
-  // is NOT called here: its real behavior is unverified and it turned out to
-  // reset the shared CONNECT-proxy tunnel for every sandbox's egress, not just
-  // this one — global sbx-daemon-level port-forwarding wiring, not scoped to a
-  // single box. It stays available as the explicit "Enable SSH" action (see
-  // the module-level `sshSetup()` export below, wired to the frontend's SSH
-  // bridge button), which a developer opts into deliberately instead of it
-  // running — and risking breaking egress — on every single `sbx create`.
+  // SSH access (Stage 2): mint a keypair + fixed host port, bootstrap sshd
+  // inside the sandbox, then publish that host port to the sandbox's :22 so
+  // it's actually reachable. Docker Sandboxes' own `sbx setup ssh` /
+  // `ssh <name>.sbx` (host-local ssh_config generation, authenticated over
+  // the daemon's Unix socket) is a separate, redundant path onto the same
+  // box — removed from Huddle rather than kept alongside this one, since it
+  // duplicated this mechanism without adding anything the JetBrains link or
+  // `huddle sbx ssh-setup` need.
   const sshAccess = provisionSshAccess(opts.name, 'sbx');
   steps.push(await runInSandbox(opts.name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
+  steps.push(await publishSshPort(opts.name, sshAccess.port));
 
   // JetBrains backend install (background) — see ideInstallScript's doc comment.
   steps.push(await runInSandbox(opts.name, 'install JetBrains IDE backend (background)', ideInstallScript(sshAccess.port)));
@@ -399,6 +399,26 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   if (jbScript) steps.push(await runInSandbox(opts.name, 'record JetBrains customizations', jbScript));
 
   return { ...result(steps.every((s) => s.code === 0)), ignoredEnv: ignoredEnv.length ? ignoredEnv : undefined };
+}
+
+/**
+ * Bind the host port Huddle minted for this sandbox's sshd (`ssh-keys.ts`,
+ * `provisionSshAccess`) to its container-side port 22, via `sbx ports`.
+ * Without this, the port shown to the user in the UI/CLI (`huddle sbx
+ * ssh-setup`) is never actually reachable — sshd runs inside the box, but
+ * nothing on the host forwards to it. A failure here is reported as a normal
+ * failed create-step rather than swallowed, since a silently-unpublished
+ * port looks identical to a working one until someone tries to connect.
+ */
+async function publishSshPort(name: string, hostPort: number): Promise<SbxStep> {
+  const spec = `${hostPort}:22`;
+  const command = `sbx ports ${name} --publish ${spec}`;
+  try {
+    const r = await ops.portsPublish(name, spec);
+    return { label: 'publish SSH port', command, code: r.code, stdout: r.stdout, stderr: r.stderr };
+  } catch (err) {
+    return { label: 'publish SSH port', command, code: 1, stdout: '', stderr: (err as Error).message };
+  }
 }
 
 /** Generic "run this script inside the sandbox" step — same shape as trustCa/linkSettingsFolders. */
@@ -598,8 +618,4 @@ export async function removeSandbox(name: string, force = false): Promise<number
   dropSandboxIdentity(name);
   dropSshAccess(name);
   return code;
-}
-
-export async function sshSetup(): Promise<number> {
-  return ops.sshSetup();
 }

@@ -60,7 +60,7 @@ import {
 } from './docker';
 import { getSshAccess, dropSshAccess } from './ssh-keys';
 import { grantSudo, revokeSudo } from './sudo-grant';
-import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan, jetbrainsGatewayLink } from './sbx';
+import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, reconcile, trustCa, policyLogFor, settingsFolderPlan, jetbrainsGatewayLink } from './sbx';
 import { hasSandboxIdentity } from './sandbox/registry';
 import { isValidWorkspacePath } from './sandbox/protocol';
 import { scheduleReconcile } from './sandbox/auto-sync';
@@ -1302,18 +1302,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     // frontend polls this same route again rather than this request waiting.
     const jetbrainsLink = await jetbrainsGatewayLink(name).catch(() => null);
     return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port, jetbrainsLink };
-  });
-
-  // One-time SSH bridge setup so sandboxes are reachable at <name>.sbx for
-  // VS Code / JetBrains remote development (host-side `sbx setup ssh`).
-  app.post('/api/sbx/ssh-setup', async (_req, reply) => {
-    try {
-      const exitCode = await sshSetup();
-      logAudit({ containerId: null, domain: '-', action: `admin:sbx-ssh-setup${exitCode === 0 ? '' : '-failed'}` });
-      return { exitCode, ok: exitCode === 0 };
-    } catch (err: any) {
-      return reply.code(502).send({ error: err.message });
-    }
   });
 
   // Reconcile Huddle's rules into sbx policy (one-way, Huddle = truth). Pass

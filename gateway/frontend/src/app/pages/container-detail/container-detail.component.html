@@ -377,13 +377,12 @@ sudo cat /tmp/sudo-audit.log</code></pre>
       <div class="card" style="padding:18px">
         <div class="card__head"><h2 class="card__title">Connect</h2></div>
         <p style="font-size:13px;color:var(--text-muted);margin:.4rem 0 1rem">
-          Open this sandbox in your editor over SSH, or use a terminal. Click <b>Enable SSH</b> once, then use a link.
+          Open this sandbox in your editor over SSH, or use a terminal.
         </p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <a class="btn btn--accent btn-sm" [href]="vscodeLink">Open in VS Code</a>
           <button class="btn btn--accent btn-sm" (click)="openJetbrains()">Open in JetBrains</button>
           @if (jetbrainsStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ jetbrainsStatus }}</span> }
-          <button class="btn btn-ghost btn-sm" (click)="sbxSshSetup()">Enable SSH</button>
           <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()">Trust CA</button>
           @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
         </div>
