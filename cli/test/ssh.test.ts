@@ -88,6 +88,19 @@ describe('syncManagedSshConfig', () => {
     expect(content.indexOf('Host huddle-sbx-foo')).toBeLessThan(content.indexOf('Host huddle-sbx-bar'));
   });
 
+  // Regression test: sandbox names commonly already start with "huddle-sbx-"
+  // (the default auto-generated pattern, api.ts's `huddle-sbx-${Date.now()
+  // .toString(36)}`, and apparently the create modal's own default too).
+  // Prefixing unconditionally produced Host huddle-sbx-huddle-sbx-<x>, an
+  // alias `sbx` itself reported as not existing — confirmed against a real
+  // sandbox in production use, not a hypothetical.
+  it('does not double-prefix a sandbox name that already starts with huddle-sbx-', () => {
+    const r = syncManagedSshConfig([entry('huddle-sbx-mumtklto', 24850)]);
+    const content = fs.readFileSync(r.path, 'utf8');
+    expect(content).toContain('Host huddle-sbx-mumtklto');
+    expect(content).not.toContain('huddle-sbx-huddle-sbx-mumtklto');
+  });
+
   it('is idempotent — the same entries synced twice produce byte-identical content', () => {
     const entries = [entry('foo', 24851), entry('bar', 24852)];
     syncManagedSshConfig(entries);

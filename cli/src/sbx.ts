@@ -5,7 +5,7 @@
 
 import { get, post, del, ApiError } from './api';
 import { dim } from './utils';
-import { writeSshKeyFile, syncManagedSshConfig, type SbxSshEntry } from './ssh';
+import { writeSshKeyFile, syncManagedSshConfig, sbxHostAlias, type SbxSshEntry } from './ssh';
 
 interface SbxStatus {
   available: boolean;
@@ -207,7 +207,7 @@ export async function runSbxSshSetup(opts: { name?: string }): Promise<void> {
     return;
   }
   console.log('✓ SSH config ready. Connect with:');
-  console.log(`    ssh huddle-sbx-${opts.name}`);
+  console.log(`    ssh ${sbxHostAlias(opts.name)}`);
   console.log(dim(`  (or add it as a VS Code / JetBrains remote host — Remote-SSH resolves the alias)`));
 }
 

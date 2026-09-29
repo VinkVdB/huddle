@@ -209,12 +209,17 @@ export class ContainerDetailComponent implements OnInit {
     });
   }
   get sshHost(): string { return this.sbxSshAccess ? `localhost:${this.sbxSshAccess.port}` : '…'; }
-  // huddle-sbx-<name> is the managed Host alias `huddle init`/`huddle sbx
-  // ssh-setup` write into ~/.ssh/config (cli/src/ssh.ts syncManagedSshConfig)
-  // — it carries the identity file and port, so this needs neither.
-  get sshCommand(): string { return this.sbxSshAccess ? `ssh huddle-sbx-${this.name}` : 'ssh …'; }
+  // The managed Host alias `huddle init`/`huddle sbx ssh-setup` write into
+  // ~/.ssh/config (cli/src/ssh.ts's sbxHostAlias/syncManagedSshConfig —
+  // mirror this exactly if that logic ever changes). Sandbox names commonly
+  // already start with "huddle-sbx-" (the default auto-generated pattern),
+  // so prefixing unconditionally produced a double-prefixed alias that
+  // doesn't exist — confirmed live, sbx itself reported it as not found.
+  get sbxHostAlias(): string { return this.name.startsWith('huddle-sbx-') ? this.name : `huddle-sbx-${this.name}`; }
+  // This carries the identity file and port, so sshCommand/vscodeLink need neither.
+  get sshCommand(): string { return this.sbxSshAccess ? `ssh ${this.sbxHostAlias}` : 'ssh …'; }
   get vscodeLink(): string {
-    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+huddle-sbx-${this.name}/root` : '';
+    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+${this.sbxHostAlias}/root` : '';
   }
   // Huddle Node deliberately never writes ~/.ssh/config itself (backlog #5 —
   // keeping that outside an always-on background service's reach); only the

@@ -48,9 +48,23 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * The `~/.ssh/config` Host alias for a sandbox. Sandbox names commonly
+ * already start with `huddle-sbx-` (the default auto-generated pattern from
+ * `api.ts`'s create route, `huddle-sbx-${Date.now().toString(36)}`, and
+ * apparently the create modal's own default too) — prefixing unconditionally
+ * produced `huddle-sbx-huddle-sbx-<x>`, an alias that resolves to nothing
+ * sbx itself recognises (confirmed live: `sbx` reported that double-prefixed
+ * name as not existing, while the single-prefixed real name connected fine).
+ * Only add the prefix when the name doesn't already carry it.
+ */
+export function sbxHostAlias(name: string): string {
+  return name.startsWith('huddle-sbx-') ? name : `huddle-sbx-${name}`;
+}
+
 function renderHost(entry: SbxSshEntry, knownHostsPath: string): string {
   return [
-    `Host huddle-sbx-${entry.name}`,
+    `Host ${sbxHostAlias(entry.name)}`,
     `  HostName localhost`,
     `  Port ${entry.port}`,
     `  User root`,
