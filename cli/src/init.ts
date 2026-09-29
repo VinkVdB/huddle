@@ -496,6 +496,19 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
       // and `claude` fails with ECONNRESET. See cli/src/sbx-host-ca.ts.
       const { installHostCa, printHostCaResult } = await import('./sbx-host-ca');
       printHostCaResult(installHostCa());
+      // Best-effort — keeps ~/.ssh/config's managed Host aliases in step with
+      // whatever sandboxes Huddle currently knows about, so `ssh
+      // huddle-sbx-<name>` (and VS Code Remote-SSH) work without a manual
+      // per-sandbox `huddle sbx ssh-setup` first. Never fails init itself.
+      try {
+        const { syncSbxSshConfig } = await import('./sbx');
+        const sync = await syncSbxSshConfig();
+        if (sync && sync.count > 0) {
+          console.log(dim(`  SSH config synced for ${sync.count} sandbox(es) — connect via \`ssh huddle-sbx-<name>\` or an IDE's Remote-SSH`));
+        }
+      } catch {
+        // best-effort — must never fail init itself
+      }
     } else {
       console.log(dim('  (sbx not found on PATH — install Docker Sandboxes to use sbx boxes)'));
     }

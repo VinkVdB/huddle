@@ -385,6 +385,19 @@ sudo cat /tmp/sudo-audit.log</code></pre>
         <p style="font-size:13px;color:var(--text-muted);margin:.4rem 0 1rem">
           Open this sandbox in your editor over SSH, or use a terminal.
         </p>
+        <div class="noot-cred">
+          <span class="noot-cred__label">Run this once</span>
+          <span class="noot-cred__pass">{{ sshSetupCommand }}</span>
+          <div class="noot-cred__actions">
+            <button class="btn btn-ghost btn-sm" (click)="copySshSetupCommand()">
+              <app-icon [name]="sshSetupCopied ? 'check' : 'copy'" [size]="14" />
+              {{ sshSetupCopied ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
+        </div>
+        <p class="noot-cmd-note" style="margin:0 0 1rem">
+          Wires up SSH and VS Code access on this machine — Huddle Node deliberately never touches your <code>~/.ssh/config</code> itself, so this is the one manual step. Safe to re-run any time.
+        </p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <a class="btn btn--accent btn-sm" [href]="vscodeLink">Open in VS Code</a>
           <button class="btn btn--accent btn-sm" (click)="openJetbrains()">Open in JetBrains</button>

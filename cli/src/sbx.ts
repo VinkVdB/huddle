@@ -3,9 +3,9 @@
 // (same role the rest of the CLI plays). The gateway talks to the native
 // host-agent over the volume-mapped socket; nothing sbx-related runs here.
 
-import { get, post, del } from './api';
+import { get, post, del, ApiError } from './api';
 import { dim } from './utils';
-import { installSshKey } from './ssh';
+import { writeSshKeyFile, syncManagedSshConfig, type SbxSshEntry } from './ssh';
 
 interface SbxStatus {
   available: boolean;
@@ -151,17 +151,64 @@ export async function runSbxTrustHost(opts: { runtime?: string } = {}): Promise<
   if (!r.ok) process.exitCode = 1;
 }
 
+/**
+ * Best-effort sync of ~/.ssh/config's Huddle-managed section against every
+ * sandbox Huddle currently knows about — one Host alias (huddle-sbx-<name>)
+ * per sandbox with SSH access provisioned. Called automatically from `huddle
+ * init` and from `huddle sbx ssh-setup`, so a plain `ssh huddle-sbx-<name>`
+ * (or an IDE's Remote-SSH) works without a manual per-sandbox step. Returns
+ * null on any failure to even list sandboxes (sbx unavailable, Huddle
+ * unreachable) — never fatal to its caller.
+ */
+export async function syncSbxSshConfig(): Promise<{ path: string; count: number; names: string[] } | null> {
+  let sandboxes: SandboxInfo[];
+  try {
+    ({ sandboxes } = await get<{ sandboxes: SandboxInfo[] }>('/api/sbx/sandboxes'));
+  } catch {
+    return null;
+  }
+
+  const entries: SbxSshEntry[] = [];
+  for (const s of sandboxes) {
+    try {
+      const key = await get<{ privateKey: string; publicKey: string; port: number }>(
+        `/api/sbx/sandboxes/${encodeURIComponent(s.name)}/ssh-key`
+      );
+      const keyPath = writeSshKeyFile(`sbx-${s.name}`, key);
+      entries.push({ name: s.name, port: key.port, keyPath });
+    } catch (err) {
+      // Not provisioned yet (still creating) is expected, not an error —
+      // anything else is also just skipped, since this sync must never be
+      // fatal to whatever called it.
+      if (!(err instanceof ApiError) || err.status !== 404) {
+        console.log(dim(`  (skipping SSH config for "${s.name}": ${(err as Error).message})`));
+      }
+    }
+  }
+
+  const result = syncManagedSshConfig(entries);
+  return { ...result, names: entries.map((e) => e.name) };
+}
+
 export async function runSbxSshSetup(opts: { name?: string }): Promise<void> {
   if (!opts.name) {
     console.error('Usage: huddle sbx ssh-setup <name>');
     process.exit(1);
   }
-  // A sandbox "Runs as root" — there is no separate `vscode` user to log in as
-  // (see sbx.ts's sshBootstrapScript doc comment).
-  const key = await get<{ privateKey: string; publicKey: string; port: number }>(
-    `/api/sbx/sandboxes/${encodeURIComponent(opts.name)}/ssh-key`
-  );
-  installSshKey(`sbx-${opts.name}`, key, 'root');
+  const sync = await syncSbxSshConfig();
+  if (!sync) {
+    console.error('✗ Could not reach Huddle to list sandboxes.');
+    process.exitCode = 1;
+    return;
+  }
+  if (!sync.names.includes(opts.name)) {
+    console.error(`✗ Sandbox "${opts.name}" not found, or SSH not yet provisioned — is it still creating?`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log('✓ SSH config ready. Connect with:');
+  console.log(`    ssh huddle-sbx-${opts.name}`);
+  console.log(dim(`  (or add it as a VS Code / JetBrains remote host — Remote-SSH resolves the alias)`));
 }
 
 export async function runSbxReconcile(opts: { dryRun?: boolean }): Promise<void> {

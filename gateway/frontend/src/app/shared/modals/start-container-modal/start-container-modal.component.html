@@ -403,6 +403,19 @@
         @if (ignoredEnvWarnings.length) {
           <p class="form-error">Ignored by Huddle (reserved names): {{ ignoredEnvWarnings.join(', ') }}</p>
         }
+        @if (sandboxSshHint) {
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)">
+            <span style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);min-width:80px">Run this once</span>
+            <code style="font-family:'Space Grotesk',monospace;font-size:13px;color:var(--text);flex:1;min-width:120px">{{ sandboxSshHint }}</code>
+            <button class="btn btn-ghost btn-sm" (click)="copySandboxSshHint()">
+              <app-icon [name]="sandboxSshHintCopied ? 'check' : 'copy'" [size]="14" />
+              {{ sandboxSshHintCopied ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
+          <p style="font-size:12.5px;color:var(--text-muted);margin:10px 0 0;line-height:1.5">
+            Wires up SSH and VS Code access for this sandbox on this machine — Huddle Node deliberately never touches your <code>~/.ssh/config</code> itself, so this is the one manual step.
+          </p>
+        }
       </div>
       <div class="modal-footer sc-foot-panel">
         <img class="sc-foot-art" src="/assets/penguin-create.webp" alt="" width="64" height="64">
@@ -415,7 +428,7 @@
           <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">
             @if (loading) {
               Working…
-            } @else if (doneWithWarnings) {
+            } @else if (doneWithWarnings || sandboxSshHint) {
               Close
             } @else {
               Start environment

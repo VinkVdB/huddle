@@ -209,9 +209,24 @@ export class ContainerDetailComponent implements OnInit {
     });
   }
   get sshHost(): string { return this.sbxSshAccess ? `localhost:${this.sbxSshAccess.port}` : '…'; }
-  get sshCommand(): string { return this.sbxSshAccess ? `ssh -p ${this.sbxSshAccess.port} root@localhost` : 'ssh …'; }
+  // huddle-sbx-<name> is the managed Host alias `huddle init`/`huddle sbx
+  // ssh-setup` write into ~/.ssh/config (cli/src/ssh.ts syncManagedSshConfig)
+  // — it carries the identity file and port, so this needs neither.
+  get sshCommand(): string { return this.sbxSshAccess ? `ssh huddle-sbx-${this.name}` : 'ssh …'; }
   get vscodeLink(): string {
-    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+root@localhost:${this.sbxSshAccess.port}/root` : '';
+    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+huddle-sbx-${this.name}/root` : '';
+  }
+  // Huddle Node deliberately never writes ~/.ssh/config itself (backlog #5 —
+  // keeping that outside an always-on background service's reach); only the
+  // CLI does, and only when asked. This command is the one manual step that
+  // wires up the alias sshCommand/vscodeLink above already assume exists.
+  get sshSetupCommand(): string { return `huddle sbx ssh-setup ${this.name}`; }
+  sshSetupCopied = false;
+  copySshSetupCommand(): void {
+    navigator.clipboard.writeText(this.sshSetupCommand).then(() => {
+      this.sshSetupCopied = true;
+      setTimeout(() => { this.sshSetupCopied = false; }, 2000);
+    });
   }
   sbxStartBusy = false;
   startSandbox(): void {
