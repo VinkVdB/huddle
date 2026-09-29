@@ -56,16 +56,6 @@ export interface FolderMapping {
   sort_order: number;
 }
 
-export interface SbxStatus {
-  available: boolean;
-  version: string;
-  error?: string;
-  /** The sbx binary Huddle would run, or null when this process cannot run it. */
-  bin: string | null;
-  upstreamUrl: string;
-  proxyPort: number;
-}
-
 export interface SbxStep {
   label: string;
   command: string;
@@ -133,26 +123,6 @@ export interface SbxSshAccess {
   port: number;
   /** The backend's self-published jetbrains-gateway://connect link, or null while it's still installing/starting. */
   jetbrainsLink: string | null;
-}
-
-export interface SbxReconcileAction {
-  op: 'create' | 'delete';
-  action: 'allow' | 'deny';
-  target: string;
-  scope: { kind: string; name?: string };
-  ok: boolean;
-  error?: string;
-}
-
-export interface SbxReconcileReport {
-  ok: boolean;
-  dryRun: boolean;
-  sandboxes: string[];
-  created: number;
-  deleted: number;
-  failed: number;
-  actions: SbxReconcileAction[];
-  error?: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -350,10 +320,6 @@ export class ApiService {
   }
 
   // ── Docker Sandboxes (sbx) — experimental second box type ──────────────────
-  sbxStatus(): Observable<SbxStatus> {
-    return this.handle(this.http.get<SbxStatus>('/api/sbx/status'));
-  }
-
   startSbx(
     body: {
       name?: string; agent?: string; workspace?: string; workspaces?: { path: string; readOnly?: boolean }[];
@@ -397,11 +363,6 @@ export class ApiService {
 
   sbxSshKey(name: string): Observable<SbxSshAccess> {
     return this.handle(this.http.get<SbxSshAccess>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/ssh-key`));
-  }
-
-  sbxReconcile(dryRun = false): Observable<SbxReconcileReport> {
-    const q = dryRun ? '?dryRun=1' : '';
-    return this.handle(this.http.post<SbxReconcileReport>(`/api/sbx/reconcile${q}`, {}));
   }
 
   setGrant(container: string, minutes: number): Observable<Grant> {
