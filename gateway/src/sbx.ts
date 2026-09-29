@@ -24,7 +24,7 @@ import {
 import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
 import { dropSandboxIdentity, mintSandboxIdentity } from './sandbox/registry';
-import { provisionSshAccess, dropSshAccess } from './ssh-keys';
+import { provisionSshAccess, getSshAccess, dropSshAccess } from './ssh-keys';
 import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl } from './sbx-identity';
 // Reused verbatim from the devcontainer path so a hand-typed env key/lifecycle
 // command is validated and rendered identically in both runtimes — see
@@ -241,6 +241,26 @@ export function startSandbox(opts: SbxStartOpts): Promise<SbxStartResult> {
 }
 
 async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult> {
+  // Resume vs create: sbx has no `start`/`restart` verb (docs/ADR-sbx-identity.md
+  // §4, measured 2026-08-30) — a stopped sandbox "returns when someone next uses
+  // it", and the proxy identity baked in at create survives a stop untouched (it
+  // is never re-read from the global setting). A name `ops.list()` already knows
+  // about is therefore a RESUME, not a create: re-running `ops.create` or
+  // re-minting identity/SSH access would be redundant at best (sbx has no
+  // create-on-existing semantics to lean on) and would desync Huddle's DB from
+  // the credential/key actually already live on the box. Only what does NOT
+  // survive a stop (the sshd process, the host-side port publish) needs action —
+  // see resumeSandboxExclusive, which mirrors docker.ts's startExistingContainer.
+  let existing: SandboxInfo | undefined;
+  try {
+    existing = (await ops.list()).find((s) => s.name === opts.name);
+  } catch {
+    // `sbx ls` failing is not proof of absence — fall through to the create path
+    // below rather than risk re-creating (and re-minting the identity of) a
+    // sandbox that may still be alive.
+  }
+  if (existing) return resumeSandboxExclusive(opts.name, opts.lifecycle);
+
   const agentName = opts.agent || SBX_AGENT;
   const { primary, extras, settings } = resolveWorkspaces(opts);
   const workspace = primary.path;
@@ -399,6 +419,48 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   if (jbScript) steps.push(await runInSandbox(opts.name, 'record JetBrains customizations', jbScript));
 
   return { ...result(steps.every((s) => s.code === 0)), ignoredEnv: ignoredEnv.length ? ignoredEnv : undefined };
+}
+
+/**
+ * Resume a sandbox `ops.list()` already knows about (see the branch at the top
+ * of startSandboxExclusive). Deliberately does NOT call `mintSandboxIdentity` or
+ * `ops.create` — per docs/ADR-sbx-identity.md §4, the box's proxy credential
+ * survives a stop untouched, and sbx has no create-on-existing/restart verb to
+ * invoke. Mirrors docker.ts's startExistingContainer: SSH access is fetched
+ * read-only rather than re-minted, and only what does NOT survive a stop is
+ * re-run (the sshd process inside the box, and the host-side port publish,
+ * which is the daemon's own state and separate from the box's filesystem).
+ */
+async function resumeSandboxExclusive(name: string, lifecycle: LifecycleCommands | undefined): Promise<SbxStartResult> {
+  const steps: SbxStep[] = [];
+  const result = (ok: boolean): SbxStartResult => ({ ok, upstreamUrl: '', proxyPort: SBX_PROXY_PORT, steps });
+
+  // Touching the box is what actually wakes a stopped one ("returns when
+  // someone next uses it") and doubles as a liveness check before anything
+  // below assumes it's reachable.
+  steps.push(await runInSandbox(name, 'wake sandbox', 'true'));
+
+  steps.push(await trustCa(name));
+
+  let sshAccess = getSshAccess(name);
+  if (!sshAccess) {
+    // Shouldn't normally happen for a name ops.list() knows about, but a
+    // sandbox with no ssh_access row (created outside Huddle, or the row was
+    // otherwise lost) has nothing to reuse — provision fresh rather than
+    // leave SSH broken.
+    sshAccess = provisionSshAccess(name, 'sbx');
+    steps.push(await runInSandbox(name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
+  }
+  steps.push(await publishSshPort(name, sshAccess.port));
+
+  // postStartCommand only — onCreate/updateContent/postCreate/env-script/
+  // settings-folder-linking/JetBrains install are create-only concerns,
+  // exactly like docker.ts's startExistingContainer only re-running
+  // postStartCommand on every resume.
+  const postStartScript = buildSbxLifecycleStep('postStart', lifecycle?.postStartCommand, DEFAULT_WORKSPACE);
+  if (postStartScript) steps.push(await runInSandbox(name, 'run lifecycle commands', postStartScript));
+
+  return result(steps.every((s) => s.code === 0));
 }
 
 /**

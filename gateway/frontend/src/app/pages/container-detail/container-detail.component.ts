@@ -196,10 +196,30 @@ export class ContainerDetailComponent implements OnInit {
   // SSH access is a fixed host-port on localhost (see gateway/src/ssh-keys.ts — there is no
   // per-sandbox DNS name), so sshHost/vscodeLink fall back to a not-yet-loaded placeholder.
   sbxSshAccess: SbxSshAccess | null = null;
+  // Running/stopped, from the same GET /api/sbx/sandboxes the dev-environments
+  // list already uses (dev-environments.component.ts) — matches its
+  // running/statusLabel convention so the two pages agree.
+  sbxStatus: string | null = null;
+  get sbxRunning(): boolean { return /up|run/i.test(this.sbxStatus || ''); }
+  get sbxStatusLabel(): string { return this.sbxRunning ? 'Running' : (this.sbxStatus || 'Stopped'); }
+  loadSbxStatus(): void {
+    this.api.listSbxSandboxes().subscribe({
+      next: (r) => { this.sbxStatus = r.sandboxes.find((s) => s.name === this.name)?.status ?? null; },
+      error: () => { /* leave sbxStatus null — badge just stays hidden until it loads */ },
+    });
+  }
   get sshHost(): string { return this.sbxSshAccess ? `localhost:${this.sbxSshAccess.port}` : '…'; }
   get sshCommand(): string { return this.sbxSshAccess ? `ssh -p ${this.sbxSshAccess.port} root@localhost` : 'ssh …'; }
   get vscodeLink(): string {
     return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+root@localhost:${this.sbxSshAccess.port}/root` : '';
+  }
+  sbxStartBusy = false;
+  startSandbox(): void {
+    this.sbxStartBusy = true;
+    this.api.startSbx({ name: this.name }).subscribe({
+      next: () => { this.sbxStartBusy = false; this.loadSbxStatus(); this.loadSbxSshAccess(); },
+      error: (e) => { this.sbxStartBusy = false; this.sbxMsg = '✗ ' + (e?.error?.error || 'start failed'); },
+    });
   }
   sbxTrustCa(): void {
     this.sbxMsg = 'Installing Huddle CA…';
@@ -218,17 +238,51 @@ export class ContainerDetailComponent implements OnInit {
   }
   // The backend publishes its own connect link once IntelliJ has finished installing and
   // starting (gateway/src/sbx.ts jetbrainsGatewayLink) — fetch fresh rather than relying on
-  // a possibly-stale cached value, since installs can take minutes.
+  // a possibly-stale cached value, since installs can take minutes. The install itself is
+  // fire-and-forget on the backend (backgrounded, no completion signal), so readiness is
+  // only knowable by polling this endpoint until jetbrainsLink stops being null.
+  private jetbrainsPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private jetbrainsPollStartedAt = 0;
+  private static readonly JETBRAINS_POLL_INTERVAL_MS = 5_000;
+  private static readonly JETBRAINS_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
   openJetbrains(): void {
+    this.clearJetbrainsPoll();
+    this.jetbrainsPollStartedAt = Date.now();
     this.jetbrainsStatus = 'Fetching...';
+    this.pollJetbrainsLink();
+  }
+
+  private pollJetbrainsLink(): void {
     this.api.sbxSshKey(this.name).subscribe({
       next: (access) => {
         this.sbxSshAccess = access;
-        if (access.jetbrainsLink) { this.jetbrainsStatus = ''; window.open(access.jetbrainsLink, '_self'); }
-        else { this.jetbrainsStatus = 'Still installing IntelliJ — try again in a bit'; }
+        if (access.jetbrainsLink) {
+          this.clearJetbrainsPoll();
+          this.jetbrainsStatus = '';
+          window.open(access.jetbrainsLink, '_self');
+          return;
+        }
+        if (Date.now() - this.jetbrainsPollStartedAt > ContainerDetailComponent.JETBRAINS_POLL_TIMEOUT_MS) {
+          this.clearJetbrainsPoll();
+          this.jetbrainsStatus = 'Still installing after 10 minutes — check the sandbox or try again later';
+          return;
+        }
+        this.jetbrainsStatus = 'Installing IntelliJ… (checking again in a moment)';
+        this.jetbrainsPollTimer = setTimeout(() => this.pollJetbrainsLink(), ContainerDetailComponent.JETBRAINS_POLL_INTERVAL_MS);
       },
-      error: (err) => { this.jetbrainsStatus = err.message; },
+      error: (err) => {
+        this.clearJetbrainsPoll();
+        this.jetbrainsStatus = err.message;
+      },
     });
+  }
+
+  private clearJetbrainsPoll(): void {
+    if (this.jetbrainsPollTimer != null) {
+      clearTimeout(this.jetbrainsPollTimer);
+      this.jetbrainsPollTimer = null;
+    }
   }
 
   ports = signal<ApprovedHostPort[]>([]);
@@ -255,8 +309,8 @@ export class ContainerDetailComponent implements OnInit {
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
     if (!this.isSandbox) this.loadSudoGrant();
-    if (this.isSandbox) this.loadSbxSshAccess();
-    this.destroyRef.onDestroy(() => this.clearSudoExpiryTimer());
+    if (this.isSandbox) { this.loadSbxSshAccess(); this.loadSbxStatus(); }
+    this.destroyRef.onDestroy(() => { this.clearSudoExpiryTimer(); this.clearJetbrainsPoll(); });
   }
 
   get sudoActive(): boolean { return this.sudoUntil != null && this.sudoUntil > this.nowTs; }

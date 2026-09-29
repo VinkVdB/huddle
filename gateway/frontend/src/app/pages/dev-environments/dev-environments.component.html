@@ -56,6 +56,7 @@
                   <button class="btn btn-delete btn-sm" (click)="snapshot(e.name)">Snapshot</button>
                   <button class="btn btn-delete btn-sm" (click)="deleteContainer(e.name)">Delete</button>
                 } @else {
+                  @if (!e.running) { <button class="btn btn--accent btn-sm" (click)="startSandbox(e.name)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Start' }}</button> }
                   <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e.name)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Delete' }}</button>
                 }
               </div>

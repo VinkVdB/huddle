@@ -95,6 +95,13 @@ export class DevEnvironmentsComponent {
   snapshot(name: string): void { this.modal.openSnapshot(name); }
 
   // sandbox actions (create is handled by the shared "Create dev environment" modal)
+  startSandbox(name: string): void {
+    this.setBusy(name, 'Starting…');
+    this.api.startSbx({ name }).subscribe({
+      next: () => { this.setBusy(name, null); this.refreshSandboxes(); },
+      error: (e) => { this.setBusy(name, null); this.notice.set('✗ ' + (e?.error?.error || 'start failed')); },
+    });
+  }
   deleteSandbox(name: string): void {
     if (!confirm(`Remove sandbox "${name}"? This deletes the microVM.`)) return;
     this.setBusy(name, 'Removing…');

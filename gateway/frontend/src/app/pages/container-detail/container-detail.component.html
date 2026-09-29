@@ -32,6 +32,9 @@
       <div class="cd-head__badges">
         @if (isSandbox) {
           <span class="cd-badge cd-badge--ok"><app-icon name="layers" [size]="11" /> Sandbox · microVM</span>
+          @if (sbxStatus !== null) {
+            <span class="cd-badge" [class.cd-badge--ok]="sbxRunning" [class.cd-badge--warn]="!sbxRunning">{{ sbxStatusLabel }}</span>
+          }
         } @else {
           @if (inNetwork) {
             <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
@@ -51,6 +54,9 @@
     </div>
     <div class="cd-head__actions">
       @if (isSandbox) {
+        @if (sbxStatus !== null && !sbxRunning) {
+          <button class="btn btn--accent btn-sm" (click)="startSandbox()" [disabled]="sbxStartBusy">{{ sbxStartBusy ? 'Starting…' : 'Start' }}</button>
+        }
         <a class="btn btn-ghost btn-sm" [href]="vscodeLink" title="Open in VS Code (Remote-SSH)">VS Code</a>
         <button class="btn btn-ghost btn-sm" (click)="openJetbrains()" title="Open in JetBrains Gateway">JetBrains</button>
         @if (jetbrainsStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ jetbrainsStatus }}</span> }
