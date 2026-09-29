@@ -1,4 +1,5 @@
 import { Component, inject, effect, HostListener } from '@angular/core';
+import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgTemplateOutlet } from '@angular/common';
 import { ModalService } from '../../../core/services/modal.service';
@@ -334,6 +335,7 @@ export class StartContainerModalComponent {
   modalService = inject(ModalService);
   private api = inject(ApiService);
   private state = inject(StateService);
+  private router = inject(Router);
 
   // Which kind of dev environment to create. Defaults to 'container' on open —
   // every entry point that opens this modal predates sandboxes and is still
@@ -400,15 +402,6 @@ export class StartContainerModalComponent {
   // it open a beat longer purely to show these — see confirm().
   ignoredEnvWarnings: string[] = [];
   doneWithWarnings = false;
-  // Sandbox create only: sbx.ts's create path deliberately never touches the
-  // user's local ~/.ssh/config (see backlog #5 — that's CLI-only, on purpose,
-  // to keep an always-on background service from gaining write access to a
-  // security-sensitive file outside its own data dir). This is the only place
-  // that tells the user they still need to run the one-time setup command —
-  // keeps the modal open a beat longer instead of auto-closing, same idea as
-  // doneWithWarnings above.
-  sandboxSshHint: string | null = null;
-  sandboxSshHintCopied = false;
 
   // Devcontainer mode has the same "settings folders" concept sandbox already
   // shows (host-config.ts folder mappings, applied to every container
@@ -525,8 +518,6 @@ export class StartContainerModalComponent {
     };
     this.ignoredEnvWarnings = [];
     this.doneWithWarnings = false;
-    this.sandboxSshHint = null;
-    this.sandboxSshHintCopied = false;
     this.containerSettingsFolders = [];
     this.restoreRemembered();
     this.loadImagesForIde();
@@ -848,7 +839,7 @@ export class StartContainerModalComponent {
   }
 
   confirm(): void {
-    if (this.doneWithWarnings || this.sandboxSshHint) { this.close(); return; }
+    if (this.doneWithWarnings) { this.close(); return; }
     if (this.kind === 'sandbox') { this.confirmSandbox(); return; }
     const err = this.validate();
     if (err) { this.error = err; return; }
@@ -931,31 +922,25 @@ export class StartContainerModalComponent {
         if (r.ok) {
           this.remember();
           this.modalService.notifySandboxesChanged();
-          // Always pause here instead of auto-closing — see sandboxSshHint's
-          // own doc comment for why this is the only place the user learns
-          // they still need to run this. Same "stay open a beat longer"
-          // treatment as the container path's ignoredEnv case, shown
-          // alongside it rather than instead of it when both apply.
+          // Same "stay open long enough to show what got dropped" treatment
+          // as the container path — see the ignoredEnv comment in confirm().
           if (r.ignoredEnv?.length) {
             this.ignoredEnvWarnings = r.ignoredEnv;
             this.doneWithWarnings = true;
+            this.status = '';
+          } else {
+            this.modalService.closeStart();
+            // The detail page's own Connect card already tells the user
+            // about the one-time `huddle sbx ssh-setup` step (backlog #5) —
+            // send them straight there instead of repeating it here.
+            this.router.navigate(['/container', r.name], { queryParams: { type: 'sandbox' } });
           }
-          this.sandboxSshHint = `huddle sbx ssh-setup ${r.name}`;
-          this.status = '';
         } else {
           this.status = '';
           this.error = r.steps.find((s) => s.code !== 0)?.stderr?.trim() || 'Sandbox creation failed';
         }
       },
       error: (err) => { this.loading = false; this.status = ''; this.error = err?.error?.error || err?.message || 'Sandbox creation failed'; },
-    });
-  }
-
-  copySandboxSshHint(): void {
-    if (!this.sandboxSshHint) return;
-    navigator.clipboard.writeText(this.sandboxSshHint).then(() => {
-      this.sandboxSshHintCopied = true;
-      setTimeout(() => { this.sandboxSshHintCopied = false; }, 2000);
     });
   }
 
