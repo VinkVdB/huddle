@@ -198,6 +198,19 @@ function cmdUp(args) {
   const sbxProxyPort = resolveSbxProxyPort(args);
 
   guardDevHome(devHome);
+
+  // `up` after `up` (instead of `down && up`) used to silently reuse whatever
+  // Node/gateway was already running for this instance — including one
+  // started before the most recent rebuild, so a fresh `npm run build` would
+  // build new code and UI assets that nothing was actually serving. `huddle
+  // init` (called below) has its own, deliberate "reuse a running Node"
+  // behavior for real installs, where that's the right default — but this
+  // script owns this instance's whole lifecycle already (see cmdDown), so it
+  // can just always start from a clean slate instead of asking init to guess
+  // whether the one it would find is still the right build.
+  console.log('> ensuring a clean slate (tearing down any previous run of this instance)');
+  cmdDown(args);
+
   fs.mkdirSync(devHome, { recursive: true, mode: 0o700 });
 
   ensureBuilt('gateway', path.join(ROOT, 'gateway', 'dist', 'index.js'));
