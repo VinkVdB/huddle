@@ -193,6 +193,10 @@ if (!has('--skip-ui')) {
 
 if (!has('--skip-tsc')) {
   step(2, 'Type-checking');
+  // Stamp src/version.ts before tsc compiles it — this script runs tsc
+  // directly rather than through npm's build:ts, so it needs its own copy of
+  // that step (see write-version.mjs's own doc comment).
+  run(process.execPath, ['scripts/write-version.mjs']);
   runCli('typescript', 'tsc', []);
   ok('tsc clean');
 } else {

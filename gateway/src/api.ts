@@ -76,6 +76,7 @@ import { isControlPath } from './control/http';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
+import { HUDDLE_VERSION } from './version';
 import {
   initLoader,
   loadAllExtensions,
@@ -194,6 +195,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.get('/api/auth/status', async (req) => {
     return { authenticated: isAuthenticated(req.headers) };
+  });
+
+  // Shown in the sidebar footer. See version.ts's own doc comment for how the
+  // value gets there (CI-injected semver, `git describe` locally, else 'dev').
+  app.get('/api/version', async () => {
+    const raw = HUDDLE_VERSION;
+    const version = raw === 'dev' || /^v/i.test(raw) ? raw : `v${raw}`;
+    return { version };
   });
 
   // ── WebSocket push ────────────────────────────────────────────────────────

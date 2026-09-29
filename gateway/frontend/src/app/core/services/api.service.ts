@@ -452,6 +452,10 @@ export class ApiService {
     return this.handle(this.http.get<Extension[]>('/api/extensions'));
   }
 
+  getVersion(): Observable<{ version: string }> {
+    return this.handle(this.http.get<{ version: string }>('/api/version'));
+  }
+
   uploadExtension(file: File): Observable<{ id: string; name: string; restartRequired: boolean }> {
     const form = new FormData();
     form.append('file', file);
