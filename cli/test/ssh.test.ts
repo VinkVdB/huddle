@@ -52,8 +52,8 @@ function configPath(): string {
   return path.join(tmpHome, '.ssh', 'config');
 }
 
-function entry(name: string, port: number): SbxSshEntry {
-  return { name, port, keyPath: `/tmp/fake-key-${name}` };
+function entry(name: string, port: number, user = 'agent'): SbxSshEntry {
+  return { name, port, keyPath: `/tmp/fake-key-${name}`, user };
 }
 
 const knownHosts = path.join(CONFIG_DIR, 'ssh', 'known_hosts');
@@ -68,7 +68,7 @@ describe('syncManagedSshConfig', () => {
     expect(content).toContain('Host huddle-sbx-foo');
     expect(content).toContain('  HostName localhost');
     expect(content).toContain('  Port 24851');
-    expect(content).toContain('  User root');
+    expect(content).toContain('  User agent');
     expect(content).toContain('  IdentityFile /tmp/fake-key-foo');
     expect(content).toContain('  IdentitiesOnly yes');
     expect(content).toContain('  StrictHostKeyChecking no');
@@ -86,6 +86,19 @@ describe('syncManagedSshConfig', () => {
     const content = fs.readFileSync(r.path, 'utf8');
     expect(r.count).toBe(2);
     expect(content.indexOf('Host huddle-sbx-foo')).toBeLessThan(content.indexOf('Host huddle-sbx-bar'));
+  });
+
+  // The login user is discovered per-sandbox at bootstrap (gateway/src/sbx.ts
+  // sshBootstrapScript) and is NOT assumed to be uniform — this used to be a
+  // hardcoded 'root' for every entry, so a fixture with two different real
+  // values is the regression test for that.
+  it('renders each entry\'s own User line rather than a single hardcoded value', () => {
+    const r = syncManagedSshConfig([entry('foo', 24851, 'agent'), entry('bar', 24852, 'someoneelse')]);
+    const content = fs.readFileSync(r.path, 'utf8');
+    const fooBlock = content.slice(content.indexOf('Host huddle-sbx-foo'), content.indexOf('Host huddle-sbx-bar'));
+    const barBlock = content.slice(content.indexOf('Host huddle-sbx-bar'));
+    expect(fooBlock).toContain('  User agent');
+    expect(barBlock).toContain('  User someoneelse');
   });
 
   // Regression test: sandbox names commonly already start with "huddle-sbx-"

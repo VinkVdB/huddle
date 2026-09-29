@@ -216,10 +216,15 @@ export class ContainerDetailComponent implements OnInit {
   // so prefixing unconditionally produced a double-prefixed alias that
   // doesn't exist — confirmed live, sbx itself reported it as not found.
   get sbxHostAlias(): string { return this.name.startsWith('huddle-sbx-') ? this.name : `huddle-sbx-${this.name}`; }
-  // This carries the identity file and port, so sshCommand/vscodeLink need neither.
+  // The alias carries Port/IdentityFile/User from ~/.ssh/config, so sshCommand
+  // needs none of them. vscodeLink still needs the PATH to open, and that is the
+  // real user's home (/home/agent) — it used to be a hardcoded /root, which does
+  // not exist for the user the sandbox actually execs as.
   get sshCommand(): string { return this.sbxSshAccess ? `ssh ${this.sbxHostAlias}` : 'ssh …'; }
   get vscodeLink(): string {
-    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+${this.sbxHostAlias}/root` : '';
+    return this.sbxSshAccess
+      ? `vscode://vscode-remote/ssh-remote+${this.sbxHostAlias}${this.sbxSshAccess.home}`
+      : '';
   }
   // Huddle Node deliberately never writes ~/.ssh/config itself (backlog #5 —
   // keeping that outside an always-on background service's reach); only the

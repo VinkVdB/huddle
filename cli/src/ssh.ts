@@ -38,6 +38,14 @@ export interface SbxSshEntry {
   name: string;
   port: number;
   keyPath: string;
+  /**
+   * The login user inside the sandbox. NOT root: `sbx exec` runs as `agent`
+   * (uid 1000), which is also where the bootstrap script put authorized_keys —
+   * this line used to say `User root`, so every generated Host block pointed at
+   * a user that has no key and, on a stock image, no shell either. Huddle Node
+   * discovers the real value on every start and hands it over with the key.
+   */
+  user: string;
 }
 
 const SSH_CONFIG_BEGIN = '# BEGIN HUDDLE SBX SSH CONFIG — managed by huddle, do not edit by hand';
@@ -67,7 +75,7 @@ function renderHost(entry: SbxSshEntry, knownHostsPath: string): string {
     `Host ${sbxHostAlias(entry.name)}`,
     `  HostName localhost`,
     `  Port ${entry.port}`,
-    `  User root`,
+    `  User ${entry.user}`,
     `  IdentityFile ${entry.keyPath}`,
     `  IdentitiesOnly yes`,
     // sbx recycles a small host-port pool (24850-24899) across many different

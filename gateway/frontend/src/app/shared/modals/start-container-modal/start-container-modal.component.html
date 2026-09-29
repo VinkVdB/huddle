@@ -37,7 +37,7 @@
                 <ul class="sc-fact" [class.on]="kind === 'sandbox'">
                   <li><app-icon name="check" [size]="13" /> MicroVM isolation</li>
                   <li><app-icon name="check" [size]="13" /> Docker runs inside the VM</li>
-                  <li><app-icon name="check" [size]="13" /> Runs as root</li>
+                  <li><app-icon name="check" [size]="13" /> Runs as the sandbox agent user (sudo available)</li>
                 </ul>
                 <ul class="sc-fact" [class.on]="kind === 'container'">
                   <li><app-icon name="check" [size]="13" /> Container isolation</li>

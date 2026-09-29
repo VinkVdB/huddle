@@ -121,6 +121,10 @@ export interface SbxSshAccess {
   privateKey: string;
   publicKey: string;
   port: number;
+  /** Login user inside the sandbox (`agent`, not root) — see gateway/src/sbx.ts. */
+  user: string;
+  /** That user's home directory — what VS Code should open as the remote path. */
+  home: string;
   /** The backend's self-published jetbrains-gateway://connect link, or null while it's still installing/starting. */
   jetbrainsLink: string | null;
 }

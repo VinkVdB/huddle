@@ -1310,7 +1310,21 @@ export async function createApiServer(): Promise<FastifyInstance> {
     // Best-effort: null while the backend is still installing/starting — the
     // frontend polls this same route again rather than this request waiting.
     const jetbrainsLink = await jetbrainsGatewayLink(name).catch(() => null);
-    return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port, jetbrainsLink };
+    // What a Docker Sandbox execs as when Huddle has not (yet) observed it for
+    // real — see sbx.ts sshBootstrapScript, which records the true value on
+    // every start. A pre-existing row from before that discovery existed falls
+    // back here rather than to `root`, which is what the generated
+    // ~/.ssh/config used to hardcode and which was simply wrong.
+    const SBX_DEFAULT_SSH_USER = 'agent';
+    const SBX_DEFAULT_SSH_HOME = '/home/agent';
+    return {
+      privateKey: access.privateKey,
+      publicKey: access.publicKey,
+      port: access.port,
+      user: access.user ?? SBX_DEFAULT_SSH_USER,
+      home: access.home ?? SBX_DEFAULT_SSH_HOME,
+      jetbrainsLink,
+    };
   });
 
   // Reconcile Huddle's rules into sbx policy (one-way, Huddle = truth). Pass

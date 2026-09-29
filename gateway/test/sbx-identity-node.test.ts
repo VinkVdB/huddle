@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 // zien — precies de twee dingen die stukgaan zonder dat een echte sbx meepraat.
 
 interface OpsCall {
-  fn: 'setProxy' | 'create' | 'exec' | 'remove';
+  fn: 'setProxy' | 'create' | 'exec' | 'remove' | 'portsPublish';
   url?: string;
   name?: string;
 }
@@ -45,6 +45,14 @@ vi.mock('../src/sandbox/ops', async (importOriginal) => {
       calls.push({ fn: 'remove', name: p.name });
       return removeCode;
     },
+    // Real portsPublish shells out to the `sbx` binary, which does not exist
+    // in this test environment — it would resolve to code -1 ('not found on
+    // PATH') regardless of what this suite is actually testing, which is the
+    // identity-minting sequence, not port publishing.
+    portsPublish: async (name: string) => {
+      calls.push({ fn: 'portsPublish', name });
+      return { code: 0, stdout: '', stderr: '' };
+    },
   };
 });
 
@@ -53,6 +61,13 @@ vi.mock('../src/tls-ca', () => ({ getCaCertPem: () => '-----BEGIN CERTIFICATE---
 // Folder mappings lezen de host-config van de gebruiker; een sandbox zonder
 // settings-folders houdt de steplijst kort.
 vi.mock('../src/host-config', () => ({ listFolderMappings: () => [] }));
+// The host-side SSH banner probe does a real TCP connect — nothing is
+// listening on the mocked sandbox's "port" in this suite, so without this
+// mock every start would hang for the probe's retry/timeout window for no
+// reason relevant to what this suite tests (identity minting, not SSH).
+vi.mock('../src/ssh-probe', () => ({
+  probeSshBannerWithRetry: async () => ({ ok: true, banner: 'SSH-2.0-test', error: '' }),
+}));
 
 let dbMod: typeof import('../src/db');
 let sbx: typeof import('../src/sbx');

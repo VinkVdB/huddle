@@ -24,8 +24,9 @@ import {
 import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
 import { dropSandboxIdentity, mintSandboxIdentity } from './sandbox/registry';
-import { provisionSshAccess, getSshAccess, dropSshAccess } from './ssh-keys';
+import { provisionSshAccess, getSshAccess, dropSshAccess, recordSshIdentity } from './ssh-keys';
 import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl } from './sbx-identity';
+import { probeSshBannerWithRetry } from './ssh-probe';
 // Reused verbatim from the devcontainer path so a hand-typed env key/lifecycle
 // command is validated and rendered identically in both runtimes — see
 // docs/ADR-workspace-runtime-abstraction.md on keeping the devcontainer.json
@@ -174,11 +175,12 @@ export interface SbxStartOpts {
 }
 
 /**
- * sbx has no `su vscode -c` equivalent (the sandbox "Runs as root" — one of
- * the facts the create modal shows) so, unlike buildLifecycleStep in
- * docker.ts, the command runs directly. Otherwise identical: best-effort, a
- * failing command is logged to stderr and swallowed rather than failing the
- * step (and therefore never fails the overall `ok`).
+ * sbx has no `su vscode -c` equivalent — a sandbox execs as `agent` (uid 1000,
+ * in the `sudo` group), not a picker of users the way a devcontainer's
+ * `remoteUser` is, so, unlike buildLifecycleStep in docker.ts, the command
+ * runs directly. Otherwise identical: best-effort, a failing command is
+ * logged to stderr and swallowed rather than failing the step (and therefore
+ * never fails the overall `ok`).
  */
 function buildSbxLifecycleStep(label: string, command: string | undefined, workspace: string): string {
   const cmd = (command ?? '').trim();
@@ -371,8 +373,12 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   // duplicated this mechanism without adding anything the JetBrains link or
   // `huddle sbx ssh-setup` need.
   const sshAccess = provisionSshAccess(opts.name, 'sbx');
-  steps.push(await runInSandbox(opts.name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
-  steps.push(await publishSshPort(opts.name, sshAccess.port));
+  steps.push(await bootstrapSsh(opts.name, sshAccess.publicKey));
+  const publishStep = await publishSshPort(opts.name, sshAccess.port);
+  steps.push(publishStep);
+  // Only probe a port that was actually published — otherwise the publish
+  // failure is the error worth reporting and the probe just doubles it.
+  if (publishStep.code === 0) steps.push(await verifySshReachable(sshAccess.port));
 
   // JetBrains backend install (background) — see ideInstallScript's doc comment.
   steps.push(await runInSandbox(opts.name, 'install JetBrains IDE backend (background)', ideInstallScript(sshAccess.port)));
@@ -451,8 +457,10 @@ async function resumeSandboxExclusive(name: string, lifecycle: LifecycleCommands
   // or (rare: a sandbox created outside Huddle, or a lost row) minted fresh.
   let sshAccess = getSshAccess(name);
   if (!sshAccess) sshAccess = provisionSshAccess(name, 'sbx');
-  steps.push(await runInSandbox(name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
-  steps.push(await publishSshPort(name, sshAccess.port));
+  steps.push(await bootstrapSsh(name, sshAccess.publicKey));
+  const publishStep = await publishSshPort(name, sshAccess.port);
+  steps.push(publishStep);
+  if (publishStep.code === 0) steps.push(await verifySshReachable(sshAccess.port));
 
   // postStartCommand only — onCreate/updateContent/postCreate/env-script/
   // settings-folder-linking/JetBrains install are create-only concerns,
@@ -498,6 +506,22 @@ async function runInSandbox(name: string, label: string, script: string): Promis
   } catch (err) {
     return { label, command, code: 1, stdout: out, stderr: cap(errOut || (err as Error).message) };
   }
+}
+
+/**
+ * Run sshBootstrapScript and record the user/home it reports. The exec user is
+ * NOT root (see sshBootstrapScript) and it is not knowable from the host, so
+ * the script that places authorized_keys is also the thing that tells us which
+ * user to put in the generated ~/.ssh/config and which home to point VS Code's
+ * remote path at. Parsed even on a failed step: step 1 of the script runs
+ * before anything that can fail, so a red step still teaches us the user.
+ */
+async function bootstrapSsh(name: string, publicKey: string): Promise<SbxStep> {
+  const step = await runInSandbox(name, 'install SSH server + authorized_keys', sshBootstrapScript(publicKey));
+  const user = /^HUDDLE_SSH_USER=(.+)$/m.exec(step.stdout)?.[1]?.trim();
+  const home = /^HUDDLE_SSH_HOME=(.+)$/m.exec(step.stdout)?.[1]?.trim();
+  if (user && home) recordSshIdentity(name, user, home);
+  return step;
 }
 
 /**
@@ -572,21 +596,186 @@ function caInstallCommand(): string[] {
 }
 
 /**
- * SSH access (Stage 2): install openssh-server if missing, generate host
- * keys, drop the developer's public key into authorized_keys, start sshd.
- * A sandbox "Runs as root" (see buildSbxLifecycleStep's doc comment) — there
- * is no separate `vscode` user here, so this installs for root/$HOME, not
- * /home/vscode like the devcontainer side.
+ * SSH access (Stage 2) — install openssh-server if missing, generate host keys,
+ * drop the developer's public key into authorized_keys, start sshd, and VERIFY
+ * it is listening before returning.
+ *
+ * A sandbox does NOT run as root. `sbx exec` runs as `agent` (uid 1000, member
+ * of the `sudo` group) — confirmed live 2026-09-29 (`id` inside a real
+ * sandbox: `uid=1000(agent) ... groups=1000(agent),27(sudo),1001(docker)`).
+ * The previous version of this script assumed root, so the install, the
+ * host-key generation and the port-22 bind all failed silently (`|| true`,
+ * plus a trailing `&` that forces a script's
+ * exit status to 0 no matter what) and Huddle reported a green step for a
+ * sandbox with no sshd in it at all. Everything privileged therefore goes
+ * through `sudo -n` here, exactly like caInstallCommand() above, and every
+ * failure is a real non-zero exit with a HUDDLE_SSHD_FAILED reason on stderr —
+ * which the portal step list and the create modal print verbatim.
+ *
+ * The only backgrounded command is the final `sshd -D`; everything that can
+ * fail runs and is checked in the foreground first, and the listener readback
+ * after it keeps the step's exit code honest. sshd's stdio is redirected to a
+ * file and its stdin to /dev/null so `sbx exec` still returns immediately —
+ * streamSbx() has no timeout, so a script that blocks hangs the API request.
+ *
+ * Idempotent: a sandbox that is already listening on :22 (the resume path
+ * re-runs this on every start) only gets its authorized_keys refreshed, which
+ * sshd re-reads per authentication anyway.
+ *
+ * Emits HUDDLE_SSH_USER= / HUDDLE_SSH_HOME= on stdout — bootstrapSsh() parses
+ * those, because the real login user is what the ~/.ssh/config `User` line and
+ * the VS Code remote path have to carry (they used to hardcode `root`).
+ *
+ * NOTE: keep this script free of `${`, backticks and backslashes so it needs no
+ * escaping inside this template literal.
  */
-function sshBootstrapScript(publicKey: string): string {
+export function sshBootstrapScript(publicKey: string): string {
   const pubB64 = Buffer.from(publicKey, 'utf8').toString('base64');
-  return `command -v sshd >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y --no-install-recommends openssh-server) >/dev/null 2>&1 || true
-ssh-keygen -A >/dev/null 2>&1 || true
-mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
-echo '${pubB64}' | base64 -d > "$HOME/.ssh/authorized_keys"
-chmod 600 "$HOME/.ssh/authorized_keys"
-nohup /usr/sbin/sshd -D -e > /tmp/huddle-sshd.log 2>&1 &`;
+  return `LOG=/tmp/huddle-sshd.log
+INSTALL_LOG=/tmp/huddle-sshd-install.log
+
+fail() {
+  echo "HUDDLE_SSHD_FAILED $1" >&2
+  exit 1
+}
+
+# Is anything listening on port 22? 'ss' is NOT installed in the sbx base image
+# (confirmed live), so /proc/net/tcp is the primary source: a listening socket
+# has state 0A, local port 0016 (hex 22) and an all-zero remote address.
+port22_listening() {
+  grep -qE ':0016 [0-9A-F]+:0000 0A ' /proc/net/tcp /proc/net/tcp6 2>/dev/null && return 0
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE '[^0-9]22[[:space:]]' && return 0
+  fi
+  return 1
+}
+
+can_verify() {
+  [ -r /proc/net/tcp ] && return 0
+  [ -r /proc/net/tcp6 ] && return 0
+  command -v ss >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# ---- 1. who are we (this is also WHERE authorized_keys has to land) ----------
+SSH_USER=$(id -un)
+[ -n "$SSH_USER" ] || fail "WHOAMI: could not determine the exec user"
+SSH_HOME=$HOME
+[ -n "$SSH_HOME" ] || SSH_HOME=/home/$SSH_USER
+[ -d "$SSH_HOME" ] || fail "NO_HOME: home directory $SSH_HOME does not exist"
+echo "HUDDLE_SSH_USER=$SSH_USER"
+echo "HUDDLE_SSH_HOME=$SSH_HOME"
+
+# ---- 2. authorized_keys (the one step that never needs root) -----------------
+mkdir -p "$SSH_HOME/.ssh" || fail "AUTHKEYS: mkdir $SSH_HOME/.ssh"
+chmod 700 "$SSH_HOME/.ssh" || fail "AUTHKEYS: chmod 700 $SSH_HOME/.ssh"
+printf '%s' '${pubB64}' | base64 -d > "$SSH_HOME/.ssh/authorized_keys" || fail "AUTHKEYS: could not write $SSH_HOME/.ssh/authorized_keys"
+chmod 600 "$SSH_HOME/.ssh/authorized_keys" || fail "AUTHKEYS: chmod 600 failed"
+echo HUDDLE_SSH_AUTHORIZED_KEYS_OK
+
+# ---- 3. already running? (resume re-runs this on every start) ----------------
+if port22_listening; then
+  echo HUDDLE_SSHD_ALREADY_LISTENING
+  exit 0
+fi
+
+# ---- 4. privilege ------------------------------------------------------------
+if [ "$(id -u)" = 0 ]; then
+  SUDO=
+  echo HUDDLE_SSHD_PRIVILEGE=root
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  SUDO="sudo -n"
+  echo HUDDLE_SSHD_PRIVILEGE=sudo
+else
+  fail "NO_ROOT: sshd needs root to install openssh-server, write host keys in /etc/ssh and bind port 22, but this sandbox execs as '$SSH_USER' and passwordless sudo is not available"
+fi
+
+# ---- 5. sshd present, or install it ------------------------------------------
+SSHD_BIN=
+for c in /usr/sbin/sshd /usr/local/sbin/sshd; do
+  if [ -x "$c" ]; then SSHD_BIN=$c; break; fi
+done
+[ -n "$SSHD_BIN" ] || SSHD_BIN=$(command -v sshd 2>/dev/null)
+if [ -z "$SSHD_BIN" ]; then
+  command -v apt-get >/dev/null 2>&1 || fail "NO_SSHD: openssh-server is not installed and apt-get is not available in this image"
+  echo HUDDLE_SSHD_INSTALLING
+  if ! $SUDO apt-get update -qq > "$INSTALL_LOG" 2>&1; then
+    tail -n 30 "$INSTALL_LOG" >&2
+    fail "INSTALL: apt-get update failed - a blocked package archive is the usual cause, allow deb.debian.org / archive.ubuntu.com / security.ubuntu.com in Huddle's firewall and retry"
+  fi
+  if ! $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$INSTALL_LOG" 2>&1; then
+    tail -n 30 "$INSTALL_LOG" >&2
+    fail "INSTALL: apt-get install openssh-server failed"
+  fi
+  for c in /usr/sbin/sshd /usr/local/sbin/sshd; do
+    if [ -x "$c" ]; then SSHD_BIN=$c; break; fi
+  done
+  [ -n "$SSHD_BIN" ] || SSHD_BIN=$(command -v sshd 2>/dev/null)
+  [ -n "$SSHD_BIN" ] || fail "INSTALL: openssh-server reported success but no sshd binary was found"
+  echo HUDDLE_SSHD_INSTALLED
+fi
+echo "HUDDLE_SSHD_BIN=$SSHD_BIN"
+
+# ---- 6. host keys + privilege-separation directory ---------------------------
+if ! $SUDO ssh-keygen -A > /tmp/huddle-sshd-keygen.log 2>&1; then
+  tail -n 20 /tmp/huddle-sshd-keygen.log >&2
+  fail "HOSTKEYS: ssh-keygen -A could not write host keys in /etc/ssh"
+fi
+# Debian/Ubuntu sshd refuses to start without this; it is NOT created by the
+# package on a machine with no running init (confirmed missing, live).
+$SUDO mkdir -p /run/sshd || fail "RUNDIR: could not create /run/sshd"
+$SUDO chmod 0755 /run/sshd || fail "RUNDIR: could not chmod /run/sshd"
+echo HUDDLE_SSHD_HOSTKEYS_OK
+
+# ---- 7. validate BEFORE backgrounding ----------------------------------------
+if ! $SUDO "$SSHD_BIN" -t > /tmp/huddle-sshd-test.log 2>&1; then
+  cat /tmp/huddle-sshd-test.log >&2
+  fail "CONFIG: sshd -t rejected the configuration or the host keys"
+fi
+echo HUDDLE_SSHD_CONFIG_OK
+
+# ---- 8. launch (the ONLY backgrounded command) -------------------------------
+: > "$LOG" 2>/dev/null
+nohup $SUDO "$SSHD_BIN" -D -e >> "$LOG" 2>&1 < /dev/null &
+disown 2>/dev/null || true
+
+# ---- 9. readback: is it actually listening? ----------------------------------
+if ! can_verify; then
+  echo HUDDLE_SSHD_VERIFY_UNAVAILABLE
+  exit 0
+fi
+i=0
+while [ "$i" -lt 15 ]; do
+  if port22_listening; then
+    echo HUDDLE_SSHD_LISTENING
+    exit 0
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+echo "--- tail of $LOG ---" >&2
+tail -n 40 "$LOG" >&2 2>/dev/null
+fail "NOT_LISTENING: sshd was launched but nothing is listening on port 22 after 15s"`;
+}
+
+/**
+ * Prove the published port actually reaches sshd, from the host side. The
+ * bootstrap script verifies the listener INSIDE the box and publishSshPort
+ * verifies the daemon accepted the mapping — neither covers the gap between
+ * them, which is exactly where "kex_exchange_identification: Connection
+ * aborted" lives. A failure here is a real red step: SSH not working is not a
+ * cosmetic detail of a sandbox whose whole purpose is being connected to.
+ */
+async function verifySshReachable(port: number): Promise<SbxStep> {
+  const command = `(host) tcp 127.0.0.1:${port} -> expect an "SSH-" banner`;
+  const r = await probeSshBannerWithRetry(port);
+  return {
+    label: 'verify SSH reachable',
+    command,
+    code: r.ok ? 0 : 1,
+    stdout: r.banner,
+    stderr: r.ok ? '' : `SSH on 127.0.0.1:${port} did not answer: ${r.error}`,
+  };
 }
 
 /**

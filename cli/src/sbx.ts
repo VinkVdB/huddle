@@ -171,11 +171,13 @@ export async function syncSbxSshConfig(): Promise<{ path: string; count: number;
   const entries: SbxSshEntry[] = [];
   for (const s of sandboxes) {
     try {
-      const key = await get<{ privateKey: string; publicKey: string; port: number }>(
+      const key = await get<{ privateKey: string; publicKey: string; port: number; user?: string }>(
         `/api/sbx/sandboxes/${encodeURIComponent(s.name)}/ssh-key`
       );
       const keyPath = writeSshKeyFile(`sbx-${s.name}`, key);
-      entries.push({ name: s.name, port: key.port, keyPath });
+      // `user` is optional on the wire only so a newer CLI can talk to an older
+      // Huddle Node; `agent` is what a Docker Sandbox execs as.
+      entries.push({ name: s.name, port: key.port, keyPath, user: key.user || 'agent' });
     } catch (err) {
       // Not provisioned yet (still creating) is expected, not an error —
       // anything else is also just skipped, since this sync must never be

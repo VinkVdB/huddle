@@ -59,6 +59,16 @@ docker-exec portal terminal and docker-attach IDE flows.
   `install-ide.sh` gained a `HUDDLE_SBX_ROOT=1` opt-out for its normal
   refuse-to-run-as-root guard.
 
+  > **Correction (2026-09-29):** "sbx always runs as root" above is **wrong** —
+  > `sbx exec` runs as non-root user `agent` (uid 1000, in the `sudo` group),
+  > confirmed live against a real sandbox (`id` → `uid=1000(agent) ...
+  > groups=1000(agent),27(sudo),1001(docker)`). `gateway/src/sbx.ts`'s
+  > `sshBootstrapScript()` was rewritten to escalate via `sudo -n` instead of
+  > assuming root — see its own doc comment for the fix. The JetBrains/IDE
+  > path described in this section (`/root/huddle-ide-install.log`,
+  > `HUDDLE_SBX_ROOT=1`, `/root/backend.log`) likely has the identical bug and
+  > is tracked as a follow-up — not fixed by that pass.
+
 ### JetBrains connect link
 - Rather than hand-building JetBrains Gateway's undocumented
   `jetbrains-gateway://connect#...` URL format, `install-ide.sh run` is

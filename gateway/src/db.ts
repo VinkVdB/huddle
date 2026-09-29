@@ -154,7 +154,13 @@ export function initDb(): void {
       port INTEGER NOT NULL UNIQUE,
       private_key TEXT NOT NULL,
       public_key TEXT NOT NULL,
-      created INTEGER NOT NULL
+      created INTEGER NOT NULL,
+      -- The login user inside the target and its home directory, discovered by
+      -- the bootstrap script rather than assumed: an sbx sandbox execs as
+      -- 'agent', not root (see sbx.ts sshBootstrapScript). NULL on rows written
+      -- before that discovery existed.
+      ssh_user TEXT,
+      ssh_home TEXT
     );
   `);
 
@@ -180,6 +186,15 @@ export function initDb(): void {
   }
   if (!socketCols.some(c => c.name === 'ready_at')) {
     db.exec('ALTER TABLE socket_registrations ADD COLUMN ready_at INTEGER');
+  }
+  // ssh_access predates discovering the real exec user (sbx execs as `agent`,
+  // not root — see sbx.ts sshBootstrapScript); upgrade rows created before that.
+  const sshCols = db.prepare("PRAGMA table_info(ssh_access)").all() as {name:string}[];
+  if (!sshCols.some(c => c.name === 'ssh_user')) {
+    db.exec('ALTER TABLE ssh_access ADD COLUMN ssh_user TEXT');
+  }
+  if (!sshCols.some(c => c.name === 'ssh_home')) {
+    db.exec('ALTER TABLE ssh_access ADD COLUMN ssh_home TEXT');
   }
   // path_mode marks a host-only rule as a "path allowlist": the bare domain is
   // then closed (status deny), but unknown subpaths are raised as 'requested' so

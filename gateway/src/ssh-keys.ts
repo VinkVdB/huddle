@@ -15,6 +15,10 @@ export interface SshAccess {
   port: number;
   privateKey: string;
   publicKey: string;
+  /** Login user inside the target, discovered at bootstrap; undefined until then. */
+  user?: string;
+  /** That user's home directory (VS Code's remote path needs it). */
+  home?: string;
 }
 
 const SSH_PORT_MIN = 24850;
@@ -71,6 +75,8 @@ interface SshAccessRow {
   private_key: string;
   public_key: string;
   created: number;
+  ssh_user: string | null;
+  ssh_home: string | null;
 }
 
 function fromRow(row: SshAccessRow): SshAccess {
@@ -80,6 +86,8 @@ function fromRow(row: SshAccessRow): SshAccess {
     port: row.port,
     privateKey: row.private_key,
     publicKey: row.public_key,
+    user: row.ssh_user ?? undefined,
+    home: row.ssh_home ?? undefined,
   };
 }
 
@@ -132,4 +140,14 @@ export function hasSshAccess(targetId: string): boolean {
 /** Drop a target's row (and free its port) — call when the target is removed. */
 export function dropSshAccess(targetId: string): void {
   db.prepare('DELETE FROM ssh_access WHERE target_id = ?').run(targetId);
+}
+
+/**
+ * Record the login user/home a target's SSH bootstrap actually found. Separate
+ * from provisionSshAccess because the keypair is minted BEFORE the target
+ * exists, while the user is only knowable from inside it (an sbx sandbox execs
+ * as `agent`, not root — see sbx.ts sshBootstrapScript).
+ */
+export function recordSshIdentity(targetId: string, user: string, home: string): void {
+  db.prepare('UPDATE ssh_access SET ssh_user = ?, ssh_home = ? WHERE target_id = ?').run(user, home, targetId);
 }
