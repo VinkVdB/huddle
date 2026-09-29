@@ -442,15 +442,16 @@ async function resumeSandboxExclusive(name: string, lifecycle: LifecycleCommands
 
   steps.push(await trustCa(name));
 
+  // The KEY/PORT survive a stop (reuse when we can — see the function's own
+  // doc comment), but sshd itself does not, the same reason
+  // startExistingContainer re-runs SSHD_BOOTSTRAP unconditionally on every
+  // resume: only the dummy PID1 process auto-restarts, not sshd. Running the
+  // bootstrap script is therefore NOT conditional on whether ssh_access
+  // already existed — that only decides whether the key itself gets reused
+  // or (rare: a sandbox created outside Huddle, or a lost row) minted fresh.
   let sshAccess = getSshAccess(name);
-  if (!sshAccess) {
-    // Shouldn't normally happen for a name ops.list() knows about, but a
-    // sandbox with no ssh_access row (created outside Huddle, or the row was
-    // otherwise lost) has nothing to reuse — provision fresh rather than
-    // leave SSH broken.
-    sshAccess = provisionSshAccess(name, 'sbx');
-    steps.push(await runInSandbox(name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
-  }
+  if (!sshAccess) sshAccess = provisionSshAccess(name, 'sbx');
+  steps.push(await runInSandbox(name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
   steps.push(await publishSshPort(name, sshAccess.port));
 
   // postStartCommand only — onCreate/updateContent/postCreate/env-script/
