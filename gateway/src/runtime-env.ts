@@ -63,6 +63,21 @@ function parsePort(raw: string | undefined, fallback: number, name: string): num
   return port;
 }
 
+// Mirrors cli/src/init.ts's resolveInstance(): empty for the daily-driver
+// instance, so a plain `huddle init` never gets a suffix. Only a second, fully
+// isolated stack (scripts/dev-full.mjs) sets HUDDLE_INSTANCE, which is how that
+// stack's own Node process learns its OWN gateway container's name instead of
+// assuming the literal 'huddle' — see gatewayContainerName below for why that
+// assumption silently corrupted a real devcontainer's CA trust in the past.
+function parseInstance(raw: string | undefined): string {
+  const value = (raw ?? '').trim();
+  if (!value) return '';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/.test(value)) {
+    throw new Error(`HUDDLE_INSTANCE must be alphanumeric/dashes (max 31 chars) — got "${raw}"`);
+  }
+  return value;
+}
+
 export interface RuntimeEnv {
   role: HuddleRole;
   /** Runs the network data plane: the :80 and sbx egress proxies. */
@@ -88,6 +103,25 @@ export interface RuntimeEnv {
   proxyPort: number;
   /** Dedicated egress proxy for sbx sandboxes. Gateway-side only. */
   sbxProxyPort: number;
+  /**
+   * Empty for the daily-driver instance; a name (from HUDDLE_INSTANCE) for a
+   * second, fully isolated stack (scripts/dev-full.mjs). Stamped onto every
+   * devcontainer this Node creates (docker.ts, 'com.huddle.instance' label) and
+   * used by listDevcontainers() to filter to only ITS OWN devcontainers — see
+   * gatewayContainerName for why an unscoped list is dangerous.
+   */
+  instance: string;
+  /**
+   * Docker name of THIS process's OWN gateway container: 'huddle', or
+   * 'huddle-<HUDDLE_INSTANCE>' for a second, isolated stack. Node-side only —
+   * used to inspect/attach/detach networks against its own gateway, never the
+   * hostname a devcontainer's HTTPS_PROXY resolves (that stays the literal
+   * 'huddle' via a network alias — see connectNetwork's `aliases` param).
+   * Without this, a second Node instance (e.g. scripts/dev-full.mjs) looks up
+   * the literal 'huddle' at boot, finds the REAL daily-driver gateway, and
+   * reissues its own unrelated CA into that real gateway's devcontainers.
+   */
+  gatewayContainerName: string;
   /** Docker Engine API endpoint (a named pipe on Windows in host mode). */
   dockerSocketPath: string;
   /**
@@ -161,6 +195,9 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
   const defaultDockerSocket =
     hostMode && process.platform === 'win32' ? '\\\\.\\pipe\\docker_engine' : '/var/run/docker.sock';
 
+  const instance = parseInstance(env.HUDDLE_INSTANCE);
+  const gatewayContainerName = `huddle${instance ? `-${instance}` : ''}`;
+
   return {
     role,
     runsGateway: role === 'gateway',
@@ -177,6 +214,8 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
     // Where the GATEWAY finds Node. host.docker.internal is provided by Docker
     // Desktop and injected by `huddle init` (--add-host=…:host-gateway) on Linux.
     nodeControlUrl: env.HUDDLE_NODE_CONTROL_URL?.trim() || 'http://host.docker.internal:24843',
+    instance,
+    gatewayContainerName,
     proxyPort: parsePort(env.HUDDLE_PROXY_PORT, 80, 'HUDDLE_PROXY_PORT'),
     sbxProxyPort: parsePort(env.HUDDLE_SBX_PROXY_PORT, 32768, 'HUDDLE_SBX_PROXY_PORT'),
     dockerSocketPath: env.HUDDLE_DOCKER_SOCKET?.trim() || defaultDockerSocket,

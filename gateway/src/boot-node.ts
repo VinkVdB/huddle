@@ -21,6 +21,7 @@ import { sweepExpiredSudoGrants } from './sudo-grant';
 import { registerContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
 import { startAutoSync } from './sandbox/auto-sync';
+import { runtimeEnv } from './runtime-env';
 
 // Learn the devcontainers that already exist (survives a restart).
 //
@@ -58,7 +59,7 @@ const GATEWAY_POLL_MS = 1_000;
 
 async function gatewayContainerExists(): Promise<boolean> {
   try {
-    await inspectContainer('huddle');
+    await inspectContainer(runtimeEnv.gatewayContainerName);
     return true;
   } catch {
     return false;

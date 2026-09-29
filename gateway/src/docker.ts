@@ -202,7 +202,13 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
     dockerRequest('GET', `/containers/json?all=1&filters=${encodeURIComponent(filters)}`) as Promise<any[]>,
     getHuddleNetworks(),
   ]);
-  return containers.map((c) => {
+  // Scoped to THIS Node instance: the Docker label filter above matches every
+  // devcontainer on the engine regardless of which Huddle Node instance created
+  // it, so a second, isolated stack (scripts/dev-full.mjs) would otherwise see
+  // — and every caller below would manage — the real daily-driver instance's
+  // devcontainers too. See runtimeEnv.instance / gatewayContainerName.
+  const owned = containers.filter((c) => (c.Labels?.['com.huddle.instance'] ?? '') === runtimeEnv.instance);
+  return owned.map((c) => {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
     const netName = `dc-net-${name}`;
     const dcNet = c.NetworkSettings?.Networks?.[netName] ?? c.NetworkSettings?.Networks?.['devcontainer-net'];
@@ -643,8 +649,11 @@ export function currentNetworkGeneration(): number {
   return networkGeneration;
 }
 
-export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
-  await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
+export async function connectNetwork(networkName: string, containerName: string, aliases?: string[]): Promise<void> {
+  await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, {
+    Container: containerName,
+    ...(aliases?.length ? { EndpointConfig: { Aliases: aliases } } : {}),
+  });
   networkGeneration++;
 }
 
@@ -736,7 +745,7 @@ export async function startExistingContainer(containerId: string): Promise<void>
 export async function cleanupContainerNetwork(containerName: string): Promise<void> {
   const netName = `dc-net-${containerName}`;
   if (!(await networkExists(netName))) return;
-  try { await disconnectNetwork(netName, 'huddle'); } catch {}
+  try { await disconnectNetwork(netName, runtimeEnv.gatewayContainerName); } catch {}
   try { await deleteNetwork(netName); } catch {}
 }
 
@@ -1522,7 +1531,11 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
     await createNetwork(netName);
   }
   try {
-    await connectNetwork(netName, 'huddle');
+    // Alias, not just container name: a second, isolated stack's gateway is
+    // named 'huddle-<instance>' (runtimeEnv.gatewayContainerName), but its own
+    // devcontainers still resolve the proxy at the literal 'huddle' — see
+    // HUDDLE_PROXY_URL above and proxy-self.ts's SELF_NAMES.
+    await connectNetwork(netName, runtimeEnv.gatewayContainerName, ['huddle']);
   } catch (err: any) {
     // Already connected is not an error. Docker and Podman word this differently:
     // Docker → "already exists in network", Podman → "network is already connected".
@@ -1707,6 +1720,12 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
         ...(params.lifecycle?.postStartCommand?.trim()
           ? { 'com.huddle.lifecycle.postStart': params.lifecycle.postStartCommand.trim() }
           : {}),
+        // Which Huddle Node instance created this — absent for the daily-driver
+        // instance, a name for a second, isolated stack (scripts/dev-full.mjs).
+        // listDevcontainers() filters on this so one instance's management calls
+        // (wiring, CA refresh, socket proxies, terminal exec) never touch a
+        // devcontainer that belongs to a different instance.
+        ...(runtimeEnv.instance ? { 'com.huddle.instance': runtimeEnv.instance } : {}),
       },
       ExposedPorts: {
         '22/tcp': {},

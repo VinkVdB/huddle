@@ -192,3 +192,36 @@ describe('resolveRuntimeEnv — port validation', () => {
     expect(() => resolveRuntimeEnv({ HUDDLE_CONTROL_PORT: port })).toThrow(/HUDDLE_CONTROL_PORT/);
   });
 });
+
+// A second, fully isolated Huddle Node instance (scripts/dev-full.mjs) must
+// never be mistaken for the daily-driver one. Before this, gatewayContainerExists()
+// and gateway-wiring.ts hardcoded the literal 'huddle', so a second instance
+// found the REAL gateway container and reissued its own, unrelated CA into the
+// real devcontainers (measured 2026-09-08, see boot-node.ts).
+describe('resolveRuntimeEnv — HUDDLE_INSTANCE (a second, isolated stack)', () => {
+  it('defaults to the daily-driver name, with no suffix, when unset', () => {
+    const env = resolveRuntimeEnv({});
+    expect(env.instance).toBe('');
+    expect(env.gatewayContainerName).toBe('huddle');
+  });
+
+  it('derives an instance-suffixed gateway container name when set', () => {
+    const env = resolveRuntimeEnv({ HUDDLE_INSTANCE: 'sbx' });
+    expect(env.instance).toBe('sbx');
+    expect(env.gatewayContainerName).toBe('huddle-sbx');
+  });
+
+  it('treats whitespace-only as unset', () => {
+    expect(resolveRuntimeEnv({ HUDDLE_INSTANCE: '  ' }).gatewayContainerName).toBe('huddle');
+  });
+
+  it('refuses anything that is not alphanumeric/dashes — this flows into a Docker name and a directory path', () => {
+    expect(() => resolveRuntimeEnv({ HUDDLE_INSTANCE: '../escape' })).toThrow(/HUDDLE_INSTANCE/);
+    expect(() => resolveRuntimeEnv({ HUDDLE_INSTANCE: 'sbx; rm -rf /' })).toThrow(/HUDDLE_INSTANCE/);
+    expect(() => resolveRuntimeEnv({ HUDDLE_INSTANCE: 'a'.repeat(32) })).toThrow(/HUDDLE_INSTANCE/);
+  });
+
+  it('applies the same way in the gateway role, for the gateway container that follows its own Node', () => {
+    expect(gateway({ HUDDLE_INSTANCE: 'sbx' }).gatewayContainerName).toBe('huddle-sbx');
+  });
+});

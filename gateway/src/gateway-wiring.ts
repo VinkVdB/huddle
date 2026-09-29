@@ -19,6 +19,7 @@
 // at boot, and from /api/docker/rewire-gateway when init has just created it.
 
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, refreshContainerCa } from './docker';
+import { runtimeEnv } from './runtime-env';
 
 export interface RewireReport {
   /** Devcontainers seen. */
@@ -56,7 +57,10 @@ export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
     const netName = `dc-net-${c.name}`;
     try {
       if (await networkExists(netName)) {
-        await connectNetwork(netName, 'huddle');
+        // Alias 'huddle': this instance's own gateway may be named
+        // 'huddle-<instance>' (runtimeEnv.gatewayContainerName), but a
+        // devcontainer's HTTPS_PROXY always resolves the literal 'huddle'.
+        await connectNetwork(netName, runtimeEnv.gatewayContainerName, ['huddle']);
         report.attached.push(netName);
       }
     } catch (err: any) {
