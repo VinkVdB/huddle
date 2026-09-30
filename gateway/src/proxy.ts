@@ -15,6 +15,14 @@ import { logIdentityProbe } from './identity-probe';
 import { runtimeEnv } from './runtime-env';
 import { isPublicSelfEndpoint, isSelfHost } from './proxy-self';
 
+// autoSelectFamily (Node's dual-stack/Happy-Eyeballs dial option) is real at
+// runtime on the Node 24 this repo targets, but the @types/node version
+// pinned in package.json (^20.12.5) predates it landing in http/https's
+// RequestOptions (net.connect's own options type already has it — only the
+// http/https call sites below need this local augmentation). Narrower than a
+// blanket `as any`: everything else on the object literal still type-checks.
+type RequestOptionsWithFamily = https.RequestOptions & { autoSelectFamily?: boolean };
+
 // Everything the proxy needs from the control plane. Destructured from the
 // `controlPlane` facade rather than imported from `rules`/`db`/`docker`
 // directly: these are the wrapper functions, which resolve the active binding
@@ -276,7 +284,16 @@ function forwardUpgrade(
   try {
     // Same synchronous-throw risk as tryCreateUpstreamRequest (e.g.
     // ERR_UNESCAPED_CHARACTERS): fail per handshake, not per process.
-    upstreamReq = secure ? https.request(options) : http.request(options);
+    // autoSelectFamily: Node's own default (false) picks a single DNS answer
+    // and dials only that one — no dual-stack racing. A host whose picked
+    // address happens to be an IPv6 one with a broken/blackholed route (the
+    // route being broken, not the DNS answer being wrong) then fails outright
+    // even though the same hostname is perfectly reachable over IPv4 — which
+    // is exactly what a plain `curl` (Happy-Eyeballs by default) would not
+    // hit. Confirmed live 2026-09-30: Huddle's dial to a real package mirror
+    // failed persistently while `curl` on the same host succeeded.
+    const opts: RequestOptionsWithFamily = { ...options, autoSelectFamily: true };
+    upstreamReq = secure ? https.request(opts) : http.request(opts);
   } catch {
     finishAudit(502);
     try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
@@ -626,14 +643,20 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // MCP traffic to huddle always via the API port (3000), not the proxy port (80).
     const upstreamPort = target.port || 80;
 
+    // See forwardUpgrade's matching comment: without autoSelectFamily, Node
+    // dials only one DNS-resolved address (no Happy-Eyeballs), so a host
+    // whose picked address has a broken route fails outright even when
+    // reachable on the other family.
+    const forwardOpts: RequestOptionsWithFamily = {
+      hostname: host,
+      port: upstreamPort,
+      method: req.method,
+      path: forwardPath,
+      headers: outgoingHeaders,
+      autoSelectFamily: true,
+    };
     const upstream = tryCreateUpstreamRequest(() => http.request(
-      {
-        hostname: host,
-        port: upstreamPort,
-        method: req.method,
-        path: forwardPath,
-        headers: outgoingHeaders,
-      },
+      forwardOpts,
       (upstreamRes) => {
         res.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
         upstreamRes.on('data', (chunk: Buffer) => {
@@ -840,7 +863,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // then stays invisible in the audit log (only CONNECT recorded).
     if (NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
       let established = false;
-      const upstream = net.connect(port, hostname, () => {
+      // autoSelectFamily: see forwardUpgrade's matching comment — the
+      // options-object form is required to pass it (the 3-positional-arg
+      // form net.connect(port, hostname, cb) has no options channel at all).
+      const upstream = net.connect({ host: hostname, port, autoSelectFamily: true }, () => {
         established = true;
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         logAudit({
@@ -1037,17 +1063,20 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         });
       };
 
+      const mitmOpts: RequestOptionsWithFamily = {
+        hostname,
+        port,
+        method: innerReq.method,
+        // The original encoded bytes; the decoded checkUrl is only the
+        // decision form. Traversal was already fail-closed rejected above.
+        path: rawUrl,
+        headers: upstreamHeaders,
+        servername: hostname,
+        // See forwardUpgrade's matching comment.
+        autoSelectFamily: true,
+      };
       const upstreamReq = tryCreateUpstreamRequest(() => https.request(
-        {
-          hostname,
-          port,
-          method: innerReq.method,
-          // The original encoded bytes; the decoded checkUrl is only the
-          // decision form. Traversal was already fail-closed rejected above.
-          path: rawUrl,
-          headers: upstreamHeaders,
-          servername: hostname,
-        },
+        mitmOpts,
         (upstreamRes) => {
           if (isTokenRequest && upstreamRes.statusCode === 200) {
             handleTokenExchangeResponse(upstreamRes, innerRes, containerId, complete);
