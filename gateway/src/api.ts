@@ -628,7 +628,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // a second occurrence in the same document counts as 'skipped'.
       const seen = new Set<string>();
       for (const r of effective) {
-        const key = `${r.domain.toLowerCase()} ${r.container_id ?? ''} ${r.path_pattern ?? ''}`;
+        const key = `${r.domain.toLowerCase()}\n${r.container_id ?? ''}\n${r.path_pattern ?? ''}`;
         if (seen.has(key)) { skipped++; continue; }
         seen.add(key);
 

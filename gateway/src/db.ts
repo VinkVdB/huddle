@@ -279,6 +279,53 @@ export function initDb(): void {
     ).run(huddleGroup.id);
   }
 
+  // Seed global allow rules for the Ubuntu package mirrors sbx's SSH bootstrap
+  // needs (gateway/src/sbx.ts sshBootstrapScript) IF a sandbox's own agent
+  // image doesn't already ship sshd — Huddle doesn't control that image
+  // (unlike base-devimage/Dockerfile, which bakes sshd in for exactly this
+  // reason), so the fallback install path needs real network access the first
+  // time it runs, and without this seed it would otherwise sit as a 'requested'
+  // entry blocking every fresh sandbox's first SSH connection on a human
+  // approving domains they have no context for. Same idiom as the huddle
+  // self-traffic seed above: global, idempotent, filed under its own
+  // clearly-labeled group so it's visibly Huddle-managed rather than silently
+  // indistinguishable from a user-approved rule.
+  //
+  // Domain list confirmed against the sbx image's own kit config
+  // (docker/sandbox-templates:shell-docker, an Ubuntu base, not Debian):
+  // - archive.ubuntu.com / security.ubuntu.com: the image's actual apt
+  //   sources.
+  // - download.docker.com: also a configured source for this kit — the kit's
+  //   own docs state `apt-get update` returns exit 100 (total failure) if ANY
+  //   configured source is unreachable, so this one is mandatory too even
+  //   though it looks unrelated to "installing sshd".
+  // - ports.ubuntu.com: Ubuntu's mirror for non-amd64 arches (arm64 hosts);
+  //   apt only ever hits archive.ubuntu.com on amd64, so this is a no-op allow
+  //   on amd64 hosts and required on arm64 ones.
+  // - deb.debian.org is deliberately NOT included: this image is Ubuntu-based,
+  //   not Debian, and Debian's mirror network is a different apt source
+  //   entirely — it was never one of this image's configured sources, so it
+  //   was allowing a domain that apt-get update never actually touches here.
+  for (const domain of ['archive.ubuntu.com', 'security.ubuntu.com', 'download.docker.com', 'ports.ubuntu.com']) {
+    db.prepare(
+      `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES (?, NULL, 'allow')`
+    ).run(domain);
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO firewall_groups (name, description, shared, source)
+     VALUES ('sbx-ssh-bootstrap', 'Ubuntu package mirrors — needed the first time a sandbox''s image does not already ship sshd. Managed by Huddle.', 0, 'manual')`
+  ).run();
+  const sbxSshGroup = db
+    .prepare(`SELECT id FROM firewall_groups WHERE name = 'sbx-ssh-bootstrap' COLLATE NOCASE`)
+    .get() as { id: number } | undefined;
+  if (sbxSshGroup) {
+    db.prepare(
+      `UPDATE rules SET group_id = ?
+       WHERE domain IN ('archive.ubuntu.com', 'security.ubuntu.com', 'download.docker.com', 'ports.ubuntu.com')
+         AND container_id IS NULL AND group_id IS NULL`
+    ).run(sbxSshGroup.id);
+  }
+
   db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
 
   const count = (db.prepare("SELECT COUNT(*) as n FROM audit_log").get() as { n: number }).n;

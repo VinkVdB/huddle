@@ -63,10 +63,19 @@ describe('sshBootstrapScript', () => {
     expect(script).toContain('sudo -n true');
     // Every privileged command (apt-get / ssh-keygen -A / mkdir -p /run/sshd /
     // chmod /run/sshd / sshd -t / the nohup launch) is prefixed with $SUDO.
+    // There are now MULTIPLE real "apt-get update"/"apt-get install"
+    // invocations (a direct install attempt, a fallback update, a reinstall)
+    // plus comment prose, a grep pattern and fail() messages that also happen
+    // to mention those words in plain text — filter those non-command lines
+    // out rather than taking just the first match, so this test still means
+    // what it says.
+    const codeLines = script.split('\n').filter((l) => !/^\s*#/.test(l) && !l.includes('grep -q') && !/^\s*fail /.test(l));
     for (const marker of ['apt-get update', 'apt-get install', 'ssh-keygen -A', 'mkdir -p /run/sshd', '"$SSHD_BIN" -t', '"$SSHD_BIN" -D']) {
-      const line = script.split('\n').find((l) => l.includes(marker));
-      expect(line, `expected a line containing ${JSON.stringify(marker)}`).toBeDefined();
-      expect(line).toMatch(/\$SUDO/);
+      const lines = codeLines.filter((l) => l.includes(marker));
+      expect(lines.length, `expected at least one real command line containing ${JSON.stringify(marker)}`).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line, `expected $SUDO on: ${line}`).toMatch(/\$SUDO/);
+      }
     }
   });
 
@@ -114,6 +123,90 @@ describe('sshBootstrapScript', () => {
     const script = sshBootstrapScript(TEST_PUBKEY);
     expect(script).toContain('HUDDLE_SSHD_FAILED');
     expect(script).toMatch(/fail\(\) \{[\s\S]*exit 1[\s\S]*\}/);
+  });
+});
+
+// ── apt-get update/install vs. sbx's own background `apt-get update` ─────────
+// sbx's default agent kit runs its own root, backgrounded `apt-get update` on
+// EVERY sandbox start (create and resume), which used to race Huddle's own
+// `apt-get update` for the apt *lists* lock
+// ("Could not get lock /var/lib/apt/lists/lock. It is held by process <N>
+// (apt-get)"), confirmed to recur on every fresh start. The fix: try
+// installing directly first (plain `apt-get install` never takes that lock),
+// only fall back to Huddle's own `apt-get update` when the install failure
+// looks like stale/missing package metadata, and retry THAT update in a
+// bounded backoff loop instead of failing on the first lock error. See
+// gateway/src/sbx.ts sshBootstrapScript() step 5 and
+// .claude/plans/sbx-ssh-root-cause.md ("apt lock race, root cause CONFIRMED").
+describe('sshBootstrapScript: apt lock race fix', () => {
+  it('tries a direct apt-get install BEFORE any apt-get update, to avoid the lists-lock race entirely in the common case', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    const codeLines = script.split('\n').filter((l) => !/^\s*#/.test(l) && !l.includes('grep -q') && !/^\s*fail /.test(l));
+    const idxDirectInstall = script.indexOf(codeLines.find((l) => l.includes('apt-get install'))!);
+    const idxFallbackUpdate = script.indexOf(codeLines.find((l) => l.includes('apt-get update'))!);
+    expect(idxDirectInstall).toBeGreaterThan(-1);
+    expect(idxFallbackUpdate).toBeGreaterThan(-1);
+    expect(idxDirectInstall).toBeLessThan(idxFallbackUpdate);
+  });
+
+  it('only falls back to apt-get update on a stale/missing-metadata signature, gated on the direct install\'s exit code', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    expect(script).toContain('install_rc=$?');
+    expect(script).toMatch(/if \[ "\$install_rc" != 0 \] && grep -qiE '[^']*unable to locate package[^']*'/i);
+    expect(script).toContain('HUDDLE_SSHD_STALE_CACHE');
+  });
+
+  it('retries apt-get update in a BOUNDED loop with backoff, not an unbounded wait (streamSbx has no timeout of its own)', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    // A total time budget in the ~90-120s ballpark, not e.g. "retry forever".
+    const deadlineMatch = /apt_lock_deadline_s=(\d+)/.exec(script);
+    expect(deadlineMatch).toBeTruthy();
+    const deadline = Number(deadlineMatch![1]);
+    expect(deadline).toBeGreaterThanOrEqual(60);
+    expect(deadline).toBeLessThanOrEqual(150);
+    // An actual loop construct (not a single retry) that checks the deadline
+    // and sleeps between attempts — i.e. it is a real bounded poll/backoff,
+    // not just re-running the command once.
+    expect(script).toMatch(/while :; do[\s\S]*apt-get update[\s\S]*done/);
+    expect(script).toContain('sleep "$apt_retry_delay_s"');
+    expect(script).toMatch(/apt_waited_s.*-ge.*apt_lock_deadline_s/);
+    // Exponential backoff capped at a ceiling, not a fixed busy-poll.
+    expect(script).toMatch(/apt_retry_delay_s=\$\(\(apt_retry_delay_s \* 2\)\)/);
+    expect(script).toMatch(/\[ "\$apt_retry_delay_s" -gt \d+ \] && apt_retry_delay_s=\d+/);
+  });
+
+  it('does NOT rely on DPkg::Lock::Timeout as an actual apt flag (confirmed it never applies to the lists lock apt-get update takes; the name only appears in an explanatory comment)', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    expect(script).not.toMatch(/Dpkg::Lock::Timeout=/i);
+  });
+
+  it('reports two DISTINCT failure hints — lock contention vs. a genuine fetch/network failure — instead of one misleading firewall-flavored message', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    // The old text conflated "lock held" with "blocked package archive" and
+    // pointed at deb.debian.org, which isn't even a real source for this image.
+    expect(script).not.toMatch(/blocked package archive/i);
+    expect(script).not.toContain('deb.debian.org');
+    // Lock-contention branch: names it as contention, explicitly not a firewall problem.
+    expect(script).toMatch(/lock contention, not a firewall problem/i);
+    // Genuine-fetch-failure branch: distinct message, still HUDDLE_SSHD_FAILED-shaped.
+    expect(script).toMatch(/real fetch error \(not lock contention\)/i);
+    // Both branches still funnel through the one failure-reporting convention.
+    const hintLines = script.split('\n').filter((l) => /lock contention|real fetch error/i.test(l));
+    expect(hintLines.length).toBe(2);
+    for (const line of hintLines) {
+      expect(line).toMatch(/fail "INSTALL:/);
+    }
+  });
+
+  it('the two-tier hint is chosen by inspecting the exhausted update log for the lock-held signature', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    expect(script).toMatch(/grep -qiE '[^']*could not get lock[^']*is another process using it[^']*'\s*"\$INSTALL_LOG"/i);
+  });
+
+  it('is still valid POSIX shell after the retry loop (sh -n)', () => {
+    const script = sshBootstrapScript(TEST_PUBKEY);
+    expect(() => execFileSync('sh', ['-n'], { input: script })).not.toThrow();
+    expect(() => execFileSync('dash', ['-n'], { input: script })).not.toThrow();
   });
 });
 

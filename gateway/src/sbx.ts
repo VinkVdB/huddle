@@ -626,6 +626,21 @@ function caInstallCommand(): string[] {
  * those, because the real login user is what the ~/.ssh/config `User` line and
  * the VS Code remote path have to carry (they used to hardcode `root`).
  *
+ * apt install/update ordering (added 2026-09-30, confirmed root-caused live):
+ * sbx's default agent kit runs its own root, backgrounded `apt-get update` on
+ * every sandbox start (create AND resume), so this script tries `apt-get
+ * install openssh-server` directly FIRST — both to skip a redundant update in
+ * the common case and, more importantly, because plain `apt-get install` never
+ * takes the apt *lists* lock (`/var/lib/apt/lists/lock`), only `apt-get
+ * update` does, so going straight to install sidesteps the race entirely. Only
+ * when the direct install fails with a "stale/missing metadata" signature does
+ * it fall back to its own `apt-get update`, retried in a bounded (~100s)
+ * backoff loop — that update IS the call that can genuinely race the kit's own
+ * update for the lists lock ("Could not get lock ... held by process <N>
+ * (apt-get)"). `DPkg::Lock::Timeout` does NOT help here — confirmed by local
+ * reproduction — it only covers the dpkg frontend lock (install/remove), never
+ * the lists lock `apt-get update` takes.
+ *
  * NOTE: keep this script free of `${`, backticks and backslashes so it needs no
  * escaping inside this template literal.
  */
@@ -699,11 +714,66 @@ done
 if [ -z "$SSHD_BIN" ]; then
   command -v apt-get >/dev/null 2>&1 || fail "NO_SSHD: openssh-server is not installed and apt-get is not available in this image"
   echo HUDDLE_SSHD_INSTALLING
-  if ! $SUDO apt-get update -qq > "$INSTALL_LOG" 2>&1; then
-    tail -n 30 "$INSTALL_LOG" >&2
-    fail "INSTALL: apt-get update failed - a blocked package archive is the usual cause, allow deb.debian.org / archive.ubuntu.com / security.ubuntu.com in Huddle's firewall and retry"
+
+  # sbx's default (claude) agent kit runs its own root, backgrounded
+  # 'apt-get update' on EVERY sandbox start - create and resume alike (kit
+  # spec setup.startup hook, confirmed by reading docker/sbx-kits-contrib -
+  # this is not a Huddle bug, it's how the kit is written). Try installing
+  # directly first: the kit's own update has very likely already refreshed
+  # the cache, so this both skips a redundant 'apt-get update' in the common
+  # case AND - more importantly - avoids racing the kit's update for the apt
+  # lists lock at all, since plain 'apt-get install' never touches
+  # /var/lib/apt/lists/lock (only 'apt-get update' does). That race is
+  # exactly what produced "Could not get lock /var/lib/apt/lists/lock. It is
+  # held by process <N> (apt-get)" before this fix.
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server > "$INSTALL_LOG" 2>&1
+  install_rc=$?
+
+  if [ "$install_rc" != 0 ] && grep -qiE 'unable to locate package|has no installation candidate|maybe run apt-get update|unable to fetch some archives' "$INSTALL_LOG"; then
+    # The direct install failed in a way that points at stale/missing package
+    # metadata (not e.g. a plain fetch error on the .deb itself) - fall back
+    # to our own 'apt-get update'. THIS is the call that can genuinely race
+    # the kit's background update for the lists lock, so it is retried in a
+    # bounded loop instead of failing on the first lock error.
+    #
+    # DPkg::Lock::Timeout deliberately NOT used here: confirmed by local
+    # reproduction of the exact lock scenario that it only ever covers the
+    # dpkg FRONTEND lock (/var/lib/dpkg/lock-frontend, taken by apt-get
+    # install/remove) and has zero effect on the LISTS lock apt-get update
+    # takes (/var/lib/apt/lists/lock) - byte-identical failure with or
+    # without the flag set. A real fix has to actually retry the command.
+    echo HUDDLE_SSHD_STALE_CACHE
+    apt_lock_deadline_s=100
+    apt_waited_s=0
+    apt_retry_delay_s=2
+    update_rc=1
+    while :; do
+      $SUDO apt-get update -qq >> "$INSTALL_LOG" 2>&1
+      update_rc=$?
+      [ "$update_rc" = 0 ] && break
+      [ "$apt_waited_s" -ge "$apt_lock_deadline_s" ] && break
+      sleep "$apt_retry_delay_s"
+      apt_waited_s=$((apt_waited_s + apt_retry_delay_s))
+      apt_retry_delay_s=$((apt_retry_delay_s * 2))
+      [ "$apt_retry_delay_s" -gt 10 ] && apt_retry_delay_s=10
+    done
+    if [ "$update_rc" != 0 ]; then
+      tail -n 30 "$INSTALL_LOG" >&2
+      # Two-tier hint: distinguish "another process held the lock the whole
+      # time" (retry-worthy, NOT a firewall problem - the old message here
+      # sent people chasing a firewall issue that didn't exist) from a real
+      # fetch/network failure (DNS, connection refused, 404 from a mirror).
+      if grep -qiE 'could not get lock|is another process using it|resource temporarily unavailable' "$INSTALL_LOG"; then
+        fail "INSTALL: apt-get update timed out waiting $apt_lock_deadline_s seconds for another process (most likely sbx's own background apt-get update) to release the package lock - this is lock contention, not a firewall problem; it should clear on its own, retry sbx start shortly"
+      else
+        fail "INSTALL: apt-get update failed with a real fetch error (not lock contention) - check DNS/connectivity and that Huddle's firewall allows archive.ubuntu.com, security.ubuntu.com, download.docker.com, and (on arm64 hosts) ports.ubuntu.com"
+      fi
+    fi
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$INSTALL_LOG" 2>&1
+    install_rc=$?
   fi
-  if ! $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$INSTALL_LOG" 2>&1; then
+
+  if [ "$install_rc" != 0 ]; then
     tail -n 30 "$INSTALL_LOG" >&2
     fail "INSTALL: apt-get install openssh-server failed"
   fi
