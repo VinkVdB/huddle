@@ -153,3 +153,50 @@ describe('hostCodexIndexMountArgs on a real disk', () => {
     expect(args).toEqual([]);
   });
 });
+
+describe.each([
+  ['hostAgentLogsMountArgs', hostAgentLogsMountArgs, ['.claude', 'projects'], HOST_AGENT_LOGS_MOUNT],
+  ['hostCodexLogsMountArgs', hostCodexLogsMountArgs, ['.codex', 'sessions'], HOST_CODEX_LOGS_MOUNT],
+] as const)('%s on a real disk', (_name, mountArgs, rel, mount) => {
+  let home: string;
+  let outside: string;
+  const folder = () => path.join(home, ...rel);
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-home-'));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-outside-'));
+    fs.mkdirSync(path.join(home, rel[0]));
+    fs.writeFileSync(path.join(outside, 'auth.json'), 'secret');
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('mounts the folder when it is a real directory', () => {
+    // Arrange
+    fs.mkdirSync(folder());
+
+    // Act
+    const args = mountArgs({ hostAgentLogs: true }, home);
+
+    // Assert
+    expect(args).toEqual(['-v', `${folder()}:${mount}:ro`]);
+  });
+
+  it.each([
+    ['a symlink to another folder', () => fs.symlinkSync(outside, folder())],
+    ['a symlink to its parent, which holds credentials', () => fs.symlinkSync(path.join(home, rel[0]), folder())],
+    ['a file', () => fs.writeFileSync(folder(), 'x')],
+  ])('never mounts the folder when it is %s', (_label, make) => {
+    // Arrange
+    make();
+
+    // Act
+    const args = mountArgs({ hostAgentLogs: true }, home);
+
+    // Assert
+    expect(args).toEqual([]);
+  });
+});

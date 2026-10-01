@@ -9,6 +9,15 @@ export const HOST_CODEX_LOGS_MOUNT = '/host-logs/codex/sessions';
 /** Extensions read the Codex index here; the gateway itself never opens it. */
 export const HOST_CODEX_INDEX_MOUNT = '/host-logs/codex/session_index.jsonl';
 
+/** A real directory only: Docker follows a symlinked source, which could point the mount at ~/.claude itself. */
+const isPlainDir = (p: string): boolean => {
+  try {
+    return fs.lstatSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
 /**
  * `docker run` args that expose the host's Claude session logs to extensions:
  * only ~/.claude/projects, read-only — never ~/.claude itself, which holds credentials.
@@ -16,7 +25,7 @@ export const HOST_CODEX_INDEX_MOUNT = '/host-logs/codex/session_index.jsonl';
 export function hostAgentLogsMountArgs(
   cfg: Pick<HuddleConfig, 'hostAgentLogs'>,
   homeDir: string,
-  exists: (p: string) => boolean = fs.existsSync,
+  exists: (p: string) => boolean = isPlainDir,
 ): string[] {
   if (cfg.hostAgentLogs !== true) return [];
   const projects = path.join(homeDir, '.claude', 'projects');
@@ -27,7 +36,7 @@ export function hostAgentLogsMountArgs(
 export function hostCodexLogsMountArgs(
   cfg: Pick<HuddleConfig, 'hostAgentLogs'>,
   homeDir: string,
-  exists: (p: string) => boolean = fs.existsSync,
+  exists: (p: string) => boolean = isPlainDir,
 ): string[] {
   if (cfg.hostAgentLogs !== true) return [];
   const sessions = path.join(homeDir, '.codex', 'sessions');

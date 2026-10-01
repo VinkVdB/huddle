@@ -515,7 +515,8 @@ operator's own machine needs the operator to opt in. Set `"hostAgentLogs": true`
 | `~/.codex/sessions` | `/host-logs/codex/sessions` |
 | `~/.codex/session_index.jsonl` (only as a plain file, never a symlink or hard link) | `/host-logs/codex/session_index.jsonl` |
 
-`~/.claude` and `~/.codex` themselves are never mounted: they hold credentials. `GET /api/settings` reports
+The folders are mounted only as real directories, never through a symlink. `~/.claude` and `~/.codex` themselves are
+never mounted: they hold credentials. `GET /api/settings` reports
 `hostAgentLogs` and `hostAgentLogsMounted`. Turning the setting off applies at once; the mounts go away on the next
 `huddle restart`.
 
