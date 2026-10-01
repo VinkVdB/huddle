@@ -71,7 +71,6 @@ import {
   removeExtension,
   listExtensions,
   extDispatch,
-  EXT_DIR,
   extensionDir,
 } from './extensions/registry';
 
