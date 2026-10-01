@@ -502,6 +502,23 @@ customElements.define('ext-my-extension', MyExtension);
 
 External calls via `ctx.fetch()` go through the Huddle proxy. The domain must be on the allowlist (**Firewall** → find the domain → **Allow**). Requests appear in the network log as `ext:<id>`.
 
+### Host agent logs (opt-in)
+
+Extensions cannot add mounts to the gateway, so an extension that reads Claude Code or Codex session logs from the
+operator's own machine needs the operator to opt in. Set `"hostAgentLogs": true` in `~/.huddle/config.json` (or
+`POST /api/settings` with `{ "hostAgentLogs": true }`), then run `huddle restart`. Huddle then mounts these paths
+**read-only**, and only those that exist:
+
+| Host | In the gateway |
+|---|---|
+| `~/.claude/projects` | `/host-logs/claude/projects` |
+| `~/.codex/sessions` | `/host-logs/codex/sessions` |
+| `~/.codex/session_index.jsonl` (only as a plain file, never a symlink or hard link) | `/host-logs/codex/session_index.jsonl` |
+
+`~/.claude` and `~/.codex` themselves are never mounted: they hold credentials. `GET /api/settings` reports
+`hostAgentLogs` and `hostAgentLogsMounted`. Turning the setting off applies at once; the mounts go away on the next
+`huddle restart`.
+
 ### Example: Aikido Security
 
 The built-in Aikido extension lives in `gateway/extensions/aikido/`. After loading (automatically on start), **Aikido Security** appears in the sidebar. Functionality:
