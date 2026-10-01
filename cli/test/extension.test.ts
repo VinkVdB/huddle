@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { collectExtensionFiles, planInstall } from '../src/extension';
+import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH } from '../src/extension';
 
 let dir: string;
 
@@ -95,3 +95,73 @@ describe('planInstall', () => {
     expect(plan).toEqual({ action: 'update', from: '9.0.0' });
   });
 });
+
+describe('collecting an extension folder safely', () => {
+  const valid = () => {
+    write('manifest.json', JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0' }));
+    write('index.js', 'module.exports.register = () => {};');
+  };
+
+  it.each(['manifest.json', 'index.js'])('refuses a %s that is a symlink', (name) => {
+    // Arrange
+    valid();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-cli-outside-'));
+    fs.writeFileSync(path.join(outside, 'secret'), 'not for the zip');
+    fs.rmSync(path.join(dir, name));
+    fs.symlinkSync(path.join(outside, 'secret'), path.join(dir, name));
+
+    // Act
+    const run = () => collectExtensionFiles(dir);
+
+    // Assert
+    expect(run).toThrow(/symlink/);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('refuses a symlink anywhere in the folder instead of leaving it out of the zip', () => {
+    // Arrange
+    valid();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-cli-outside-'));
+    fs.mkdirSync(path.join(dir, 'lib'));
+    fs.symlinkSync(outside, path.join(dir, 'lib', 'linked'));
+
+    // Act
+    const run = () => collectExtensionFiles(dir);
+
+    // Assert
+    expect(run).toThrow(/lib\/linked.*symlink/);
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('refuses a folder nested deeper than the limit', () => {
+    // Arrange
+    valid();
+    const deep = Array.from({ length: MAX_FOLDER_DEPTH + 1 }, (_, i) => `d${i}`).join('/');
+    write(`${deep}/file.js`, '');
+
+    // Act
+    const run = () => collectExtensionFiles(dir);
+
+    // Assert
+    expect(run).toThrow(/nested deeper than/);
+  });
+
+  it.each([
+    ['agent-logs', true], ['a1', true], ['Agent', false], ['../x', false], ['a/b', false], ['', false],
+  ])('accepts %j as an extension id: %s', (id, ok) => {
+    // Act
+    const result = isExtensionId(id);
+
+    // Assert
+    expect(result).toBe(ok);
+  });
+
+  it('refuses to remove an invalid id before calling the gateway', async () => {
+    // Act
+    const run = runExtensionRemove('../x');
+
+    // Assert
+    await expect(run).rejects.toThrow(/invalid extension id/);
+  });
+});
+
