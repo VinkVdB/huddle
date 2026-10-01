@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH, insideFolder } from '../src/extension';
+import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH, insideFolder, asExtensionList } from '../src/extension';
 
 let dir: string;
 
@@ -185,3 +185,21 @@ describe('collecting an extension folder safely', () => {
   });
 });
 
+
+describe('asExtensionList', () => {
+  it('passes a list of extensions through', () => {
+    // Act
+    const list = asExtensionList([{ id: 'agent-logs', name: 'Agent logs' }]);
+
+    // Assert
+    expect(list).toEqual([{ id: 'agent-logs', name: 'Agent logs' }]);
+  });
+
+  it.each([[{ error: 'not found' }], ['<html>'], [null]])('refuses %j, the answer of something that is not Huddle, with a hint at HUDDLE_URL', (answer) => {
+    // Act
+    const act = () => asExtensionList(answer);
+
+    // Assert
+    expect(act).toThrow(/could not reach Huddle.*HUDDLE_URL/);
+  });
+});

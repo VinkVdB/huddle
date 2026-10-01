@@ -90,8 +90,14 @@ export function planInstall(incoming: ExtensionManifest, installed: InstalledExt
   return { action: 'update', from };
 }
 
+/** The answer of /api/extensions, or an error when another service holds Huddle's address. */
+export function asExtensionList(value: unknown): InstalledExtension[] {
+  if (!Array.isArray(value)) throw new Error('could not reach Huddle: the address answered, but not with its extensions. Check HUDDLE_URL.');
+  return value as InstalledExtension[];
+}
+
 export async function runExtensionList(): Promise<void> {
-  const installed = await get<InstalledExtension[]>('/api/extensions');
+  const installed = asExtensionList(await get<unknown>('/api/extensions'));
   if (!installed.length) {
     console.log('No extensions installed.');
     return;
@@ -104,7 +110,7 @@ export async function runExtensionList(): Promise<void> {
 
 export async function runExtensionInstall(dir: string, opts: { force: boolean; restart: boolean }): Promise<void> {
   const { manifest, entries } = collectExtensionFiles(dir);
-  const plan = planInstall(manifest, await get<InstalledExtension[]>('/api/extensions'), opts.force);
+  const plan = planInstall(manifest, asExtensionList(await get<unknown>('/api/extensions')), opts.force);
   if (plan.action === 'refuse') throw new Error(plan.reason);
 
   const result = await uploadFile<{ id: string; restartRequired: boolean }>(
