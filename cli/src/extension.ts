@@ -28,12 +28,20 @@ export const MAX_FOLDER_DEPTH = 32;
 /** The gateway's own id rule: one lowercase path component, so it can never point outside the extensions folder. */
 export const isExtensionId = (id: unknown): id is string => typeof id === 'string' && /^[a-z0-9-]+$/.test(id);
 
+/** Resolves `rel` within `root` and refuses anything that lands outside it (`..`, absolute paths). */
+export function insideFolder(root: string, rel: string): string {
+  const base = path.resolve(root);
+  const abs = path.resolve(base, rel);
+  if (abs !== base && !abs.startsWith(base + path.sep)) throw new Error(`${rel} is outside the extension folder`);
+  return abs;
+}
+
 /**
  * Reads a regular file of the folder; a symlink is refused, so the zip can never carry a file from outside it.
  * @param root the resolved extension folder @param rel a path relative to it, from readdir
  */
 function readPlainFile(root: string, rel: string): Buffer {
-  const abs = path.join(root, rel);
+  const abs = insideFolder(root, rel);
   const stat = fs.lstatSync(abs);
   if (stat.isSymbolicLink()) throw new Error(`${rel} is a symlink; extensions are packaged without symlinks`);
   if (!stat.isFile()) throw new Error(`${rel} is not a regular file`);
@@ -44,7 +52,7 @@ function readPlainFile(root: string, rel: string): Buffer {
 export function collectExtensionFiles(dir: string): { manifest: ExtensionManifest; entries: ZipEntry[] } {
   const root = path.resolve(dir);
   for (const required of ['manifest.json', 'index.js']) {
-    if (!fs.lstatSync(path.join(root, required), { throwIfNoEntry: false })) throw new Error(`${required} missing in ${root}`);
+    if (!fs.lstatSync(insideFolder(root, required), { throwIfNoEntry: false })) throw new Error(`${required} missing in ${root}`);
   }
   const manifest = JSON.parse(readPlainFile(root, 'manifest.json').toString('utf8')) as ExtensionManifest;
   if (!isExtensionId(manifest.id)) {
@@ -56,7 +64,7 @@ export function collectExtensionFiles(dir: string): { manifest: ExtensionManifes
   const entries: ZipEntry[] = [];
   const walk = (rel: string, depth: number): void => {
     if (depth > MAX_FOLDER_DEPTH) throw new Error(`${rel} is nested deeper than ${MAX_FOLDER_DEPTH} folders`);
-    for (const item of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+    for (const item of fs.readdirSync(insideFolder(root, rel), { withFileTypes: true })) {
       if (item.name.startsWith('.') || SKIPPED.has(item.name)) continue;
       const childRel = rel ? `${rel}/${item.name}` : item.name;
       if (item.isSymbolicLink()) throw new Error(`${childRel} is a symlink; extensions are packaged without symlinks`);

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH } from '../src/extension';
+import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH, insideFolder } from '../src/extension';
 
 let dir: string;
 
@@ -154,6 +154,26 @@ describe('collecting an extension folder safely', () => {
 
     // Assert
     expect(result).toBe(ok);
+  });
+
+  it.each([
+    ['a parent path', '../outside.js'],
+    ['a parent path further down', 'lib/../../outside.js'],
+    ['an absolute path', '/etc/passwd'],
+  ])('refuses to resolve %s outside the extension folder', (_label, rel) => {
+    // Act
+    const run = () => insideFolder(dir, rel);
+
+    // Assert
+    expect(run).toThrow(/outside the extension folder/);
+  });
+
+  it('resolves a path inside the extension folder', () => {
+    // Act
+    const abs = insideFolder(dir, 'lib/index.js');
+
+    // Assert
+    expect(abs).toBe(path.join(path.resolve(dir), 'lib', 'index.js'));
   });
 
   it('refuses to remove an invalid id before calling the gateway', async () => {
